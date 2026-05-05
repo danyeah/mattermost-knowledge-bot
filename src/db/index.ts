@@ -40,3 +40,7 @@ export function runMigrations(): void {
     logger.info({ migration: file }, "applied migration");
   }
 }
+
+// Run on module load so repository modules can prepare statements at top level
+// without racing against an uninitialized schema on first boot.
+runMigrations();
