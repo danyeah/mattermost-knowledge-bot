@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.secrets
+.env
+.env.*
+!.env.example
+data
+*.db*
+.DS_Store
+README.md
+IMPLEMENTATION_PLAN.md
+tests

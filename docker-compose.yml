@@ -1,0 +1,15 @@
+services:
+  bot:
+    build: .
+    image: mattermost-knowledge-bot:latest
+    container_name: kb-bot
+    restart: unless-stopped
+    network_mode: host
+    env_file: ./.env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /app/data/kb-bot.db || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5

@@ -1,0 +1,29 @@
+# secrets
+.secrets/
+.env
+.env.*
+!.env.example
+
+# node
+node_modules/
+dist/
+build/
+*.log
+npm-debug.log*
+
+# data
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# os
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+*.swp
+*.swo
