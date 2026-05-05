@@ -21,21 +21,46 @@ interface SaveFlowOpts {
   triggeringUsername: string;
   thread: Post[];
   threadUsernames: Map<string, string>;
-  channelInfo: { id: string; name: string; team_id: string; display_name: string };
+  channelId: string;
   teamName: string;
   ctx: SaveFlowCtx;
 }
 
+const insertSaveStmt = db.prepare(
+  `INSERT INTO saves (mm_channel_id, mm_post_id, mm_root_post_id, triggered_by_user_id, triggered_by_username, status, error_message, payload_json)
+   VALUES (?, ?, ?, ?, ?, 'failed', NULL, ?)`,
+);
+
+const updateSaveSuccessStmt = db.prepare(
+  `UPDATE saves SET status = 'success', error_message = NULL WHERE id = ?`,
+);
+
+const updateSaveFailedStmt = db.prepare(
+  `UPDATE saves SET error_message = ? WHERE id = ?`,
+);
+
 export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: string; topicDisplayName: string }> {
-  const { triggeringPost, triggeringUsername, thread, threadUsernames, channelInfo, teamName, ctx } = opts;
+  const { triggeringPost, triggeringUsername, thread, threadUsernames, channelId, teamName, ctx } = opts;
   const { outlineClient, logger } = ctx;
 
-  const channel = findChannelByMmId(channelInfo.id);
+  const channel = findChannelByMmId(channelId);
   if (!channel) {
     throw new Error(
-      `Channel ${channelInfo.id} is not registered. The bot must be added to the channel first.`,
+      `Channel ${channelId} is not registered. The bot must be added to the channel first.`,
     );
   }
+
+  // Insert the saves row early as 'failed' so that on any subsequent failure the idempotency guard
+  // (mm_post_id UNIQUE) prevents duplicate Outline writes on retry, and the row captures the error.
+  const saveRow = insertSaveStmt.run(
+    channelId,
+    triggeringPost.id,
+    triggeringPost.root_id || triggeringPost.id,
+    triggeringPost.user_id,
+    triggeringUsername,
+    JSON.stringify({ thread_post_count: thread.length }),
+  );
+  const saveId = saveRow.lastInsertRowid;
 
   const TOPIC_SLUG = "test-topic";
   const TOPIC_DISPLAY_NAME = "Test Topic";
@@ -56,77 +81,71 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
     threadMessages,
   };
 
-  let existingTopic = findTopicByChannelAndSlug(channelInfo.id, TOPIC_SLUG);
+  let existingTopic = findTopicByChannelAndSlug(channelId, TOPIC_SLUG);
   let documentId: string;
   let documentUrlId: string | undefined;
 
-  if (!existingTopic) {
-    const initialMarkdown = buildDocument({
-      topicDisplayName: TOPIC_DISPLAY_NAME,
-      lastAiUpdateIso: "never",
-      sections: {
+  try {
+    if (!existingTopic) {
+      const initialMarkdown = buildDocument({
+        topicDisplayName: TOPIC_DISPLAY_NAME,
+        lastAiUpdateIso: "never",
+        sections: {
+          summary: null,
+          decisions: null,
+          technical_details: null,
+          operational_notes: null,
+          references: null,
+        },
+        chronologicalLog: [newEntry],
+      });
+
+      const created = await createDocument(outlineClient, {
+        collectionId: channel.outline_collection_id,
+        title: TOPIC_DISPLAY_NAME,
+        text: initialMarkdown,
+      });
+
+      documentId = created.id;
+      documentUrlId = created.urlId;
+
+      existingTopic = insertTopic({
+        mm_channel_id: channelId,
+        topic_slug: TOPIC_SLUG,
+        topic_display_name: TOPIC_DISPLAY_NAME,
+        outline_document_id: documentId,
         summary: null,
-        decisions: null,
-        technical_details: null,
-        operational_notes: null,
-        references: null,
-      },
-      chronologicalLog: [newEntry],
-    });
+      });
 
-    const created = await createDocument(outlineClient, {
-      collectionId: channel.outline_collection_id,
-      title: TOPIC_DISPLAY_NAME,
-      text: initialMarkdown,
-    });
+      logger.info({ document_id: documentId, channel_id: channelId }, "outline_document_created");
+    } else {
+      documentId = existingTopic.outline_document_id;
 
-    documentId = created.id;
-    documentUrlId = created.urlId;
+      const existing = await getDocument(outlineClient, documentId);
+      documentUrlId = existing.urlId;
+      const parsed = parseExisting(existing.text);
 
-    existingTopic = insertTopic({
-      mm_channel_id: channelInfo.id,
-      topic_slug: TOPIC_SLUG,
-      topic_display_name: TOPIC_DISPLAY_NAME,
-      outline_document_id: documentId,
-      summary: null,
-    });
+      const updatedMarkdown = buildDocument({
+        topicDisplayName: TOPIC_DISPLAY_NAME,
+        lastAiUpdateIso: "never",
+        sections: parsed.sections,
+        chronologicalLog: [],
+        belowSeparator: parsed.belowSeparator,
+        appendEntry: newEntry,
+      });
 
-    logger.info({ document_id: documentId, channel_id: channelInfo.id }, "outline_document_created");
-  } else {
-    documentId = existingTopic.outline_document_id;
+      const updated = await updateDocument(outlineClient, { id: documentId, text: updatedMarkdown });
+      if (updated.urlId) documentUrlId = updated.urlId;
 
-    const existing = await getDocument(outlineClient, documentId);
-    documentUrlId = existing.urlId;
-    const parsed = parseExisting(existing.text);
-
-    const updatedMarkdown = buildDocument({
-      topicDisplayName: TOPIC_DISPLAY_NAME,
-      lastAiUpdateIso: "never",
-      sections: parsed.sections,
-      chronologicalLog: [...parsed.chronologicalLog, newEntry],
-    });
-
-    const updated = await updateDocument(outlineClient, { id: documentId, text: updatedMarkdown });
-    if (updated.urlId) documentUrlId = updated.urlId;
-
-    touchTopic(existingTopic.id);
-    logger.info({ document_id: documentId, channel_id: channelInfo.id }, "outline_document_updated");
+      touchTopic(existingTopic.id);
+      logger.info({ document_id: documentId, channel_id: channelId }, "outline_document_updated");
+    }
+  } catch (err) {
+    updateSaveFailedStmt.run(err instanceof Error ? err.message : String(err), saveId);
+    throw err;
   }
 
-  const topicId = existingTopic.id;
-
-  db.prepare(
-    `INSERT INTO saves (mm_channel_id, mm_post_id, mm_root_post_id, topic_id, triggered_by_user_id, triggered_by_username, status, payload_json)
-     VALUES (?, ?, ?, ?, ?, ?, 'success', ?)`,
-  ).run(
-    channelInfo.id,
-    triggeringPost.id,
-    triggeringPost.root_id || triggeringPost.id,
-    topicId,
-    triggeringPost.user_id,
-    triggeringUsername,
-    JSON.stringify({ thread_post_count: thread.length }),
-  );
+  updateSaveSuccessStmt.run(saveId);
 
   const documentUrl = `${config.OUTLINE_URL}/doc/${documentUrlId ?? documentId}`;
   return { documentUrl, topicDisplayName: TOPIC_DISPLAY_NAME };

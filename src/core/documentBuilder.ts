@@ -13,7 +13,7 @@ export interface ChronologicalEntry {
   threadMessages: Array<{ timestamp: string; username: string; message: string }>;
 }
 
-const SECTION_SEPARATOR = "---";
+const CHRONOLOGICAL_MARKER = "\n---\n\n## Chronological log\n";
 const EMPTY_MARKER = "_(empty)_";
 
 function renderSection(content: string | null): string {
@@ -37,8 +37,10 @@ export function buildDocument(opts: {
   lastAiUpdateIso: string;
   sections: DocumentSections;
   chronologicalLog: ChronologicalEntry[];
+  belowSeparator?: string;
+  appendEntry?: ChronologicalEntry;
 }): string {
-  const { topicDisplayName, lastAiUpdateIso, sections, chronologicalLog } = opts;
+  const { topicDisplayName, lastAiUpdateIso, sections, chronologicalLog, belowSeparator, appendEntry } = opts;
 
   const parts: string[] = [
     `# ${topicDisplayName}`,
@@ -60,20 +62,35 @@ export function buildDocument(opts: {
     "## References",
     renderSection(sections.references),
     "",
-    SECTION_SEPARATOR,
+    "---",
     "",
     "## Chronological log",
     "*Append-only. Never modified by AI.*",
     "",
   ];
 
-  for (let i = 0; i < chronologicalLog.length; i++) {
-    if (i > 0) {
-      parts.push(SECTION_SEPARATOR);
+  if (belowSeparator !== undefined) {
+    // Update path: re-emit preserved raw log and append the new entry.
+    const raw = belowSeparator.trim();
+    if (raw) {
+      parts.push(raw);
+      parts.push("");
+      parts.push("---");
       parts.push("");
     }
-    parts.push(renderEntry(chronologicalLog[i]!));
-    parts.push("");
+    if (appendEntry) {
+      parts.push(renderEntry(appendEntry));
+      parts.push("");
+    }
+  } else {
+    for (let i = 0; i < chronologicalLog.length; i++) {
+      if (i > 0) {
+        parts.push("---");
+        parts.push("");
+      }
+      parts.push(renderEntry(chronologicalLog[i]!));
+      parts.push("");
+    }
   }
 
   return parts.join("\n").trimEnd() + "\n";
@@ -81,73 +98,50 @@ export function buildDocument(opts: {
 
 export function parseExisting(markdown: string): {
   sections: DocumentSections;
-  chronologicalLog: ChronologicalEntry[];
-  raw: { aboveSeparator: string; belowSeparator: string };
+  belowSeparator: string;
 } {
-  const separatorIndex = markdown.indexOf("\n---\n");
+  // User-edited Summary may contain '---' as a horizontal rule; only the chronological-log marker delimits the boundary.
+  const markerIndex = markdown.indexOf(CHRONOLOGICAL_MARKER);
 
   let aboveSeparator = markdown;
   let belowSeparator = "";
 
-  if (separatorIndex !== -1) {
-    aboveSeparator = markdown.slice(0, separatorIndex);
-    belowSeparator = markdown.slice(separatorIndex + 5);
+  if (markerIndex !== -1) {
+    aboveSeparator = markdown.slice(0, markerIndex);
+    // Skip past the marker header line ("## Chronological log\n") and the next line ("*Append-only...*\n")
+    const afterMarker = markdown.slice(markerIndex + CHRONOLOGICAL_MARKER.length);
+    // Strip the "*Append-only.*" line if present
+    const appendOnlyLine = "*Append-only. Never modified by AI.*\n";
+    belowSeparator = afterMarker.startsWith(appendOnlyLine)
+      ? afterMarker.slice(appendOnlyLine.length)
+      : afterMarker;
   }
 
-  function extractSection(sectionName: string, nextSectionName: string): string | null {
-    const startMarker = `\n## ${sectionName}\n`;
-    const start = aboveSeparator.indexOf(startMarker);
-    if (start === -1) return null;
+  // Build section map by splitting on heading boundaries.
+  const headingBoundary = /\n## /;
+  const headingParts = aboveSeparator.split(headingBoundary);
+  const sectionMap = new Map<string, string>();
+  for (const part of headingParts) {
+    const newline = part.indexOf("\n");
+    if (newline === -1) continue;
+    const heading = part.slice(0, newline).trim();
+    const body = part.slice(newline + 1).trim();
+    sectionMap.set(heading, body);
+  }
 
-    const contentStart = start + startMarker.length;
-    const endMarker = `\n## ${nextSectionName}`;
-    const end = aboveSeparator.indexOf(endMarker, contentStart);
-    const raw = end !== -1 ? aboveSeparator.slice(contentStart, end) : aboveSeparator.slice(contentStart);
-    const trimmed = raw.trim();
-    return trimmed === EMPTY_MARKER || trimmed === "" ? null : trimmed;
+  function getSection(heading: string): string | null {
+    const body = sectionMap.get(heading);
+    if (body === undefined) return null;
+    return body === EMPTY_MARKER || body === "" ? null : body;
   }
 
   const sections: DocumentSections = {
-    summary: extractSection("Summary", "Decisions"),
-    decisions: extractSection("Decisions", "Technical details"),
-    technical_details: extractSection("Technical details", "Operational notes"),
-    operational_notes: extractSection("Operational notes", "References"),
-    references: extractSection("References", "---"),
+    summary: getSection("Summary"),
+    decisions: getSection("Decisions"),
+    technical_details: getSection("Technical details"),
+    operational_notes: getSection("Operational notes"),
+    references: getSection("References"),
   };
 
-  const chronologicalLog: ChronologicalEntry[] = [];
-
-  if (belowSeparator) {
-    const entryHeaderPattern = /^### (.+?) — Saved by @(\S+)$/m;
-    const entryBlocks = belowSeparator.split(/\n---\n/);
-
-    for (const block of entryBlocks) {
-      const trimmedBlock = block.trim();
-      if (!trimmedBlock) continue;
-
-      const headerMatch = entryHeaderPattern.exec(trimmedBlock);
-      if (!headerMatch) continue;
-
-      const isoTimestamp = headerMatch[1]!;
-      const triggeredByUsername = headerMatch[2]!;
-
-      const linkMatch = /\[View original thread\]\((.+?)\)/.exec(trimmedBlock);
-      const permalinkUrl = linkMatch ? linkMatch[1]! : "";
-
-      const threadMessages: Array<{ timestamp: string; username: string; message: string }> = [];
-      const msgPattern = /^> \[(.+?)\] @(\S+?): (.+)$/gm;
-      let msgMatch: RegExpExecArray | null;
-      while ((msgMatch = msgPattern.exec(trimmedBlock)) !== null) {
-        threadMessages.push({
-          timestamp: msgMatch[1]!,
-          username: msgMatch[2]!,
-          message: msgMatch[3]!,
-        });
-      }
-
-      chronologicalLog.push({ isoTimestamp, triggeredByUsername, permalinkUrl, threadMessages });
-    }
-  }
-
-  return { sections, chronologicalLog, raw: { aboveSeparator, belowSeparator } };
+  return { sections, belowSeparator };
 }

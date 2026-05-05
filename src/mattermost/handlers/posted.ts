@@ -7,6 +7,7 @@ import { parseMention, sortThreadPosts } from "../helpers.js";
 import { findChannelByMmId } from "../../db/repositories/channels.js";
 import { db } from "../../db/index.js";
 import { executeSave } from "../../core/saveFlow.js";
+import { withChannelLock } from "../../utils/locks.js";
 
 interface PostedCtx {
   client: MattermostClient;
@@ -18,6 +19,8 @@ interface PostedCtx {
 }
 
 type PostedEvent = Extract<WsEvent, { event: "posted" }>;
+
+const checkExistingSaveStmt = db.prepare("SELECT id FROM saves WHERE mm_post_id = ?");
 
 export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<void> {
   const { client, outlineClient, config, logger, botUserId, teamName } = ctx;
@@ -61,9 +64,7 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
     "posted_bot_mentioned",
   );
 
-  const existingSave = db
-    .prepare("SELECT id FROM saves WHERE mm_post_id = ?")
-    .get(post.id);
+  const existingSave = checkExistingSaveStmt.get(post.id);
   if (existingSave) {
     logger.info({ post_id: post.id }, "posted_already_saved_skipping");
     return;
@@ -96,69 +97,41 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
     logger.info({ thread_id: post.root_id, post_count: thread.length }, "thread_fetched");
   } catch (err) {
     logger.error({ err, root_id: post.root_id }, "thread_fetch_failed");
+    const shortError = (String(err instanceof Error ? err.message : err).split("\n")[0] ?? "").slice(0, 200);
     await client.createPost({
       channel_id: post.channel_id,
       root_id: post.root_id,
-      message: `⚠️ Sorry, something went wrong saving this thread: ${err instanceof Error ? err.message : String(err)}`,
+      message: `⚠️ Sorry, something went wrong saving this thread: ${shortError}`,
     });
     return;
   }
 
-  let channelInfo: { id: string; name: string; team_id: string; display_name: string };
-  try {
-    const ch = await client.getChannel(post.channel_id);
-    channelInfo = { id: ch.id, name: ch.name, team_id: ch.team_id, display_name: ch.display_name };
-  } catch (err) {
-    logger.error({ err, channel_id: post.channel_id }, "channel_fetch_failed");
-    await client.createPost({
-      channel_id: post.channel_id,
-      root_id: post.root_id,
-      message: `⚠️ Sorry, something went wrong saving this thread: ${err instanceof Error ? err.message : String(err)}`,
-    });
-    return;
-  }
-
-  try {
-    const { documentUrl, topicDisplayName } = await executeSave({
-      triggeringPost: post,
-      triggeringUsername,
-      thread,
-      threadUsernames: userMap,
-      channelInfo,
-      teamName,
-      ctx: { mmClient: client, outlineClient, logger },
-    });
-
-    await client.createPost({
-      channel_id: post.channel_id,
-      root_id: post.root_id,
-      message: `✅ Saved to **${topicDisplayName}** in [collection](${documentUrl})`,
-    });
-    logger.info({ channel_id: post.channel_id, root_id: post.root_id, document_url: documentUrl }, "save_completed");
-  } catch (err) {
-    logger.error({ err }, "save_flow_failed");
-
+  await withChannelLock(post.channel_id, async () => {
     try {
-      db.prepare(
-        `INSERT OR IGNORE INTO saves (mm_channel_id, mm_post_id, mm_root_post_id, triggered_by_user_id, triggered_by_username, status, error_message, payload_json)
-         VALUES (?, ?, ?, ?, ?, 'failed', ?, ?)`,
-      ).run(
-        post.channel_id,
-        post.id,
-        post.root_id,
-        post.user_id,
+      const { documentUrl, topicDisplayName } = await executeSave({
+        triggeringPost: post,
         triggeringUsername,
-        err instanceof Error ? err.message : String(err),
-        "{}",
-      );
-    } catch (dbErr) {
-      logger.error({ dbErr }, "save_failed_row_insert_failed");
-    }
+        thread,
+        threadUsernames: userMap,
+        channelId: post.channel_id,
+        teamName,
+        ctx: { mmClient: client, outlineClient, logger },
+      });
 
-    await client.createPost({
-      channel_id: post.channel_id,
-      root_id: post.root_id,
-      message: `⚠️ Sorry, something went wrong saving this thread: ${err instanceof Error ? err.message : String(err)}`,
-    });
-  }
+      await client.createPost({
+        channel_id: post.channel_id,
+        root_id: post.root_id,
+        message: `✅ Saved to **${topicDisplayName}** → [open document](${documentUrl})`,
+      });
+      logger.info({ channel_id: post.channel_id, root_id: post.root_id, document_url: documentUrl }, "save_completed");
+    } catch (err) {
+      logger.error({ err }, "save_failed");
+      const shortError = (String(err instanceof Error ? err.message : err).split("\n")[0] ?? "").slice(0, 200);
+      await client.createPost({
+        channel_id: post.channel_id,
+        root_id: post.root_id,
+        message: `⚠️ Sorry, something went wrong saving this thread: ${shortError}`,
+      });
+    }
+  });
 }

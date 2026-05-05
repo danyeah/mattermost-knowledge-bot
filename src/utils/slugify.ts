@@ -9,6 +9,6 @@ export function slugify(input: string, maxLen = 60): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, maxLen);
 
-  if (!normalized || !/[a-z]/.test(normalized)) return "untitled";
+  if (!/[a-z]/.test(normalized)) return "untitled";
   return normalized;
 }

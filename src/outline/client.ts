@@ -58,11 +58,4 @@ export class OutlineClient {
     );
   }
 
-  getBaseUrl(): string {
-    return this.baseUrl;
-  }
-
-  getLogger(): Logger {
-    return this.logger;
-  }
 }
