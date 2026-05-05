@@ -3,6 +3,7 @@ import { db, runMigrations } from "./db/index.js";
 import { logger } from "./logger.js";
 import { MattermostClient } from "./mattermost/client.js";
 import { MattermostWebSocket, type WsEvent } from "./mattermost/websocket.js";
+import { OutlineClient } from "./outline/client.js";
 import { handlePosted } from "./mattermost/handlers/posted.js";
 import { handleUserAdded } from "./mattermost/handlers/userAdded.js";
 import { handleReactionAdded } from "./mattermost/handlers/reactionAdded.js";
@@ -21,6 +22,7 @@ async function main(): Promise<void> {
   logger.info({ tables }, "db_ready");
 
   const client = new MattermostClient(config.MM_URL, config.MM_BOT_TOKEN, logger);
+  const outlineClient = new OutlineClient(config.OUTLINE_URL, config.OUTLINE_API_TOKEN, logger);
 
   let botUserId = config.MM_BOT_USER_ID;
   if (!botUserId) {
@@ -49,7 +51,7 @@ async function main(): Promise<void> {
   function dispatch(event: WsEvent): void {
     logger.debug({ event: event.event }, "ws_event_received");
 
-    const ctx = { client, config, logger, botUserId };
+    const ctx = { client, outlineClient, config, logger, botUserId, teamName };
 
     void (async () => {
       try {
@@ -59,7 +61,12 @@ async function main(): Promise<void> {
             break;
 
           case "user_added":
-            await handleUserAdded(event as Extract<WsEvent, { event: "user_added" }>, { client, logger, botUserId });
+            await handleUserAdded(event as Extract<WsEvent, { event: "user_added" }>, {
+              client,
+              outlineClient,
+              logger,
+              botUserId,
+            });
             break;
 
           case "reaction_added":
@@ -99,8 +106,6 @@ async function main(): Promise<void> {
   logger.info("ws_connecting_start");
   ws.connect();
 
-  // Keep process alive — the WS reconnect loop is async; we park here indefinitely.
-  // Shutdown is handled via signals above.
   await new Promise<never>(() => {});
 }
 
