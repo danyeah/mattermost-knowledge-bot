@@ -94,14 +94,15 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
   }
 
   if (post.user_id === botUserId) return;
-  if (!post.root_id) return;
 
-  try {
-    const handled = await handleHashtagOverrideForPending(post, ctx);
-    if (handled) return;
-  } catch (err) {
-    logger.error({ err }, "hashtag_override_failed");
-    return;
+  if (post.root_id) {
+    try {
+      const handled = await handleHashtagOverrideForPending(post, ctx);
+      if (handled) return;
+    } catch (err) {
+      logger.error({ err }, "hashtag_override_failed");
+      return;
+    }
   }
 
   const { mentioned, afterMention } = parseMention(post.message, config.BOT_TRIGGER_MENTIONS);
@@ -143,7 +144,7 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
   if (!channelRow) {
     await client.createPost({
       channel_id: post.channel_id,
-      root_id: post.root_id,
+      root_id: post.root_id || post.id,
       message:
         "⚠️ This channel isn't configured for the knowledge bot. Try removing me from the channel and re-adding me.",
     });
@@ -155,7 +156,7 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
   if (command.subcommand === "help") {
     await client.createPost({
       channel_id: post.channel_id,
-      root_id: post.root_id,
+      root_id: post.root_id || post.id,
       message: `**Knowledge Bot commands:**
 • \`@${config.MM_BOT_USERNAME}\` (in a thread reply) — save the thread, auto-detect topic
 • \`@${config.MM_BOT_USERNAME} #topic-name\` — save with explicit topic
@@ -179,7 +180,7 @@ Documents are stored in Outline: ${config.OUTLINE_URL}`,
 
     await client.createPost({
       channel_id: post.channel_id,
-      root_id: post.root_id,
+      root_id: post.root_id || post.id,
       message: `📚 **${channelRow.mm_channel_name}** wiki status
 Collection: [${channelRow.mm_channel_name}](${collectionUrl})
 Topics: ${topicsCount}
@@ -188,7 +189,16 @@ ${lastLine}`,
     return;
   }
 
-  // Default: subcommand === "save"
+  // Default: subcommand === "save" — requires being a thread reply
+  if (!post.root_id) {
+    await client.createPost({
+      channel_id: post.channel_id,
+      root_id: post.id,
+      message: `⚠️ To save a discussion, mention me as a **reply inside a thread**. Try \`@${config.MM_BOT_USERNAME} help\` for the available commands.`,
+    });
+    return;
+  }
+
   let thread: Post[];
   let userMap: Map<string, string>;
   let triggeringUsername: string;
