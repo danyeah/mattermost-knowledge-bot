@@ -17,12 +17,25 @@ export const TopicDetectionSchema = z.object({
   reasoning: z.string(),
 });
 
+// Claude occasionally returns section bodies as JSON arrays even though the prompt
+// asks for markdown strings. Coerce arrays to bullet-list strings before validation
+// so a structurally-valid response isn't rejected over a formatting choice.
+const sectionField = z.preprocess(
+  (v) =>
+    Array.isArray(v)
+      ? v
+          .map((item) => (typeof item === "string" ? `- ${item}` : `- ${JSON.stringify(item)}`))
+          .join("\n")
+      : v,
+  z.string().nullable(),
+);
+
 export const SectionMergeSchema = z.object({
-  summary: z.string().nullable(),
-  decisions: z.string().nullable(),
-  technical_details: z.string().nullable(),
-  operational_notes: z.string().nullable(),
-  references: z.string().nullable(),
+  summary: sectionField,
+  decisions: sectionField,
+  technical_details: sectionField,
+  operational_notes: sectionField,
+  references: sectionField,
   change_summary: z.string(),
 });
 

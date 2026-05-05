@@ -46,7 +46,10 @@ Rules:
 - If the new thread doesn't add meaningful new info to a section, leave that
   section null.
 - "change_summary" is a single sentence describing the net change, used in
-  Mattermost reply and audit logs.`;
+  Mattermost reply and audit logs.
+- Every section value MUST be a single JSON string containing markdown, OR null.
+  NEVER return a JSON array of strings — even for bullet lists, emit one string
+  containing newline-separated markdown bullets (e.g. "- first bullet\\n- second bullet").`;
 
 // Present plain "(empty)" rather than the italic markup stored in the file,
 // so the model never echoes raw markdown syntax back.
