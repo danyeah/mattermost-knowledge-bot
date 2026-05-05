@@ -16,10 +16,12 @@ The bot authenticates to Mattermost via WebSocket, listens for thread replies th
 
 ## Prerequisites
 
-- Mattermost bot account with a bot token (System Console → Integrations → Bot Accounts)
-- Outline instance with an API token (Settings → API tokens) and at least one collection writable by the token
-- Anthropic API key with access to Claude Haiku
-- Node.js 20+ (local dev) or Docker with Compose v2 (production)
+- Mattermost bot account with a bot token (System Console → Integrations → Bot Accounts). The bot account must be a member of the team(s) whose channels it will serve, otherwise it cannot be invited to channels and permalinks will be malformed.
+- Outline instance with an API token (Settings → API tokens). The token's user must have permission to create collections and documents.
+- Anthropic API key with access to Claude Haiku 4.5 (or whatever model you set in `ANTHROPIC_MODEL`).
+- Node.js 20+ (local dev) or Docker 24+ with Compose v2 (production).
+
+> **Outline collection visibility**: collections created by the bot use `permission: "read"`, meaning every Outline user can read every channel's wiki. If you serve private Mattermost channels with sensitive data, decide whether that visibility model is acceptable for your team before deploying.
 
 ## Configuration
 
@@ -62,8 +64,20 @@ cd /opt/kb-bot
 cp .env.example .env
 # populate MM_BOT_TOKEN, OUTLINE_API_TOKEN, ANTHROPIC_API_KEY in .env
 
+# the container runs as UID 1000; chown the host volume so SQLite can write
+mkdir -p data && chown -R 1000:1000 data
+
 docker compose up -d --build
 docker compose logs -f
+```
+
+Healthy startup logs (in order):
+```
+db_ready
+primary_team_resolved
+confirmation_cleanup_started
+ws_connected
+ws_authenticated
 ```
 
 Logs are written via the `json-file` driver, rotated at 10 MB, kept for 5 files.
@@ -71,6 +85,10 @@ Container data (SQLite) is mounted at `./data` on the host.
 
 To stop: `docker compose down`
 To update: `git pull && docker compose up -d --build`
+
+### Co-locating with an existing Mattermost / Postgres host
+
+The bot uses `network_mode: host` so it reaches `localhost` services on the droplet directly. If you also self-host Outline next to Mattermost on the same machine, you can share Postgres between them: create a dedicated DB (`outline`) and user, point Outline's `DATABASE_URL` at `127.0.0.1:5432`, and the bot will sit alongside both as a third service. There's no DB conflict between the bot and Mattermost — the bot uses SQLite locally for its own state.
 
 ## How to use
 
@@ -80,7 +98,7 @@ To update: `git pull && docker compose up -d --build`
    ```
    @knowledge-bot
    ```
-   The bot detects the topic automatically. If confidence is below the threshold, it asks you to confirm.
+   The bot detects the topic automatically. If confidence is below `CONFIRMATION_CONFIDENCE_THRESHOLD` (default 0.85), the bot replies with a confirmation message listing the proposed topic and a couple of alternatives. React with 👍 to accept, or reply with `#different-topic` to override. Confirmations expire after `CONFIRMATION_TTL_MINUTES` (default 10).
 
 3. **Explicit topic**: add a `#topic-name` hashtag to override AI detection:
    ```
@@ -114,7 +132,10 @@ Check `ANTHROPIC_API_KEY` is valid and the configured `ANTHROPIC_MODEL` is avail
 Verify `OUTLINE_API_TOKEN` is valid and not expired. The token needs permission to create and update documents in your Outline instance.
 
 **Database issues**
-The SQLite file is at `DB_PATH` (default `./data/kb-bot.db`). Ensure the directory is writable. In Docker, the `./data` volume must be mounted.
+The SQLite file is at `DB_PATH` (default `./data/kb-bot.db`). Ensure the directory is writable by UID 1000 (the container's `node` user): `chown -R 1000:1000 data` on the host. A common first-boot symptom is `SQLITE_CANTOPEN` in the logs — fix the host directory ownership and `docker compose restart bot`.
+
+**Bot saved a save into a topic that doesn't make sense**
+Topic detection runs on the thread you mentioned the bot in. If you want explicit control, use `@bot #my-topic` in the same reply. To rename or merge topics, edit them directly in Outline; the bot tracks them by `outline_document_id`, so renaming the document title in Outline is safe (the bot still finds the right topic).
 
 ## Testing
 
