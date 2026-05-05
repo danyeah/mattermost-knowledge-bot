@@ -175,7 +175,7 @@ Documents are stored in Outline: ${config.OUTLINE_URL}`,
       | undefined;
     const lastLine = lastSave
       ? `Last save: ${lastSave.created_at} by @${lastSave.username} → ${lastSave.topic_display_name ?? "(deleted topic)"}`
-      : "Last save: (none yet)";
+      : "Last save: none yet";
 
     await client.createPost({
       channel_id: post.channel_id,
