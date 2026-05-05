@@ -184,7 +184,12 @@ export async function resumeFromConfirmation(opts: ResumeOpts): Promise<void> {
   const threadUsernames = new Map(Object.entries(payload.threadUsernamesObj));
 
   try {
-    const { documentUrl, topicDisplayName: finalDisplayName } = await executeSave({
+    const {
+      documentUrl,
+      topicDisplayName: finalDisplayName,
+      collectionName,
+      changeSummary,
+    } = await executeSave({
       triggeringPost: payload.triggeringPost,
       triggeringUsername: payload.triggeringUsername,
       thread: payload.thread as Post[],
@@ -199,7 +204,7 @@ export async function resumeFromConfirmation(opts: ResumeOpts): Promise<void> {
     await mmClient.createPost({
       channel_id: payload.channelId,
       root_id: payload.triggeringPost.root_id || payload.triggeringPost.id,
-      message: `✅ Saved to **${finalDisplayName}** → [open document](${documentUrl})`,
+      message: `✅ Saved to **${finalDisplayName}** in [${collectionName}](${documentUrl})\n_${changeSummary}_`,
     });
 
     deletePendingById(pending.id);

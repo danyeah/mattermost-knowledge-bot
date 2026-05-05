@@ -17,4 +17,14 @@ export const TopicDetectionSchema = z.object({
   reasoning: z.string(),
 });
 
+export const SectionMergeSchema = z.object({
+  summary: z.string().nullable(),
+  decisions: z.string().nullable(),
+  technical_details: z.string().nullable(),
+  operational_notes: z.string().nullable(),
+  references: z.string().nullable(),
+  change_summary: z.string(),
+});
+
 export type TopicDetection = z.infer<typeof TopicDetectionSchema>;
+export type SectionMerge = z.infer<typeof SectionMergeSchema>;

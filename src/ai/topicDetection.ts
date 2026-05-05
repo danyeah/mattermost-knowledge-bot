@@ -1,5 +1,6 @@
 import { logger } from "../logger.js";
 import { callModel } from "./client.js";
+import { stripJsonFences } from "./jsonExtract.js";
 import { TopicDetectionSchema, type TopicDetection } from "./schemas.js";
 
 export interface TopicDetectionInput {
@@ -76,26 +77,6 @@ export function toDisplayName(slug: string): string {
     .filter(Boolean)
     .map((part) => (part.length === 0 ? part : (part[0]?.toUpperCase() ?? "") + part.slice(1)))
     .join(" ");
-}
-
-function stripJsonFences(text: string): string {
-  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (fenceMatch) return fenceMatch[1] ?? text.trim();
-
-  // No fence — locate the first '{' and find its matching '}' via balanced-brace scan.
-  const start = text.indexOf("{");
-  if (start !== -1) {
-    let depth = 0;
-    for (let i = start; i < text.length; i++) {
-      if (text[i] === "{") depth++;
-      else if (text[i] === "}") {
-        depth--;
-        if (depth === 0) return text.slice(start, i + 1);
-      }
-    }
-  }
-
-  return text.trim();
 }
 
 function tryParse(text: string): TopicDetection | { error: string } {

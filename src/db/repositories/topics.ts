@@ -18,6 +18,9 @@ const insertTopicStmt = db.prepare(
   "INSERT INTO topics (mm_channel_id, topic_slug, topic_display_name, outline_document_id, summary) VALUES (?, ?, ?, ?, ?) RETURNING *",
 );
 const touchTopicStmt = db.prepare("UPDATE topics SET last_updated_at = datetime('now') WHERE id = ?");
+const updateTopicSummaryStmt = db.prepare(
+  "UPDATE topics SET summary = ?, last_updated_at = datetime('now') WHERE id = ?",
+);
 
 export function findTopicByChannelAndSlug(mmChannelId: string, topicSlug: string): TopicRow | null {
   return (findTopicStmt.get(mmChannelId, topicSlug) as TopicRow | undefined) ?? null;
@@ -41,4 +44,8 @@ export function insertTopic(
 
 export function touchTopic(topicId: number): void {
   touchTopicStmt.run(topicId);
+}
+
+export function updateTopicSummary(topicId: number, summary: string | null): void {
+  updateTopicSummaryStmt.run(summary, topicId);
 }
