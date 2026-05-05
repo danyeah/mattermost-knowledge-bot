@@ -6,11 +6,23 @@ export interface DocumentSections {
   references: string | null;
 }
 
+export interface MessageAttachment {
+  filename: string;
+  outlineUrl: string;
+  isImage: boolean;
+  unavailable?: boolean;
+}
+
 export interface ChronologicalEntry {
   isoTimestamp: string;
   triggeredByUsername: string;
   permalinkUrl: string;
-  threadMessages: Array<{ timestamp: string; username: string; message: string }>;
+  threadMessages: Array<{
+    timestamp: string;
+    username: string;
+    message: string;
+    attachments?: MessageAttachment[];
+  }>;
 }
 
 const CHRONOLOGICAL_MARKER = "\n---\n\n## Chronological log\n";
@@ -28,6 +40,15 @@ function renderEntry(entry: ChronologicalEntry): string {
   ];
   for (const msg of entry.threadMessages) {
     lines.push(`> [${msg.timestamp}] @${msg.username}: ${msg.message}`);
+    for (const att of msg.attachments ?? []) {
+      if (att.unavailable) {
+        lines.push(`> [attachment unavailable: ${att.filename}]`);
+      } else if (att.isImage) {
+        lines.push(`> ![${att.filename}](${att.outlineUrl})`);
+      } else {
+        lines.push(`> [📎 ${att.filename}](${att.outlineUrl})`);
+      }
+    }
   }
   return lines.join("\n");
 }

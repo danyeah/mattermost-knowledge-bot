@@ -13,10 +13,11 @@ import {
   type TopicRow,
 } from "../db/repositories/topics.js";
 import { createDocument, deleteDocument, getDocument, updateDocument } from "../outline/documents.js";
-import { buildDocument, parseExisting, type DocumentSections } from "./documentBuilder.js";
+import { buildDocument, parseExisting, type DocumentSections, type MessageAttachment } from "./documentBuilder.js";
 import type { SectionMerge } from "../ai/schemas.js";
 import { buildPermalink } from "../mattermost/helpers.js";
 import { mergeSections } from "../ai/sectionMerge.js";
+import { processThreadAttachments } from "./attachmentHandler.js";
 
 interface SaveFlowCtx {
   mmClient: MattermostClient;
@@ -94,7 +95,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     topicDisplayName,
     ctx,
   } = opts;
-  const { outlineClient, logger } = ctx;
+  const { mmClient, outlineClient, logger } = ctx;
 
   const channel = findChannelByMmId(channelId);
   if (!channel) {
@@ -118,17 +119,45 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
   const nowIso = new Date().toISOString();
   const todayIso = nowIso.slice(0, 10);
 
+  // Process attachments before rendering; failures degrade gracefully (missing fileIds = unavailable).
+  const attachmentMap = await processThreadAttachments({
+    thread,
+    ctx: { mmClient, outlineClient, logger },
+  });
+
+  // AI receives text only — no attachment info.
   const threadMessages = thread.map((p) => ({
     timestamp: new Date(p.create_at).toISOString(),
     username: threadUsernames.get(p.user_id) ?? p.user_id,
     message: p.message,
   }));
 
+  // Chronological log entries include attachment embeds.
+  const threadMessagesWithAttachments = thread.map((p) => {
+    const attachments: MessageAttachment[] = (p.file_ids ?? []).map((fid) => {
+      const mapping = attachmentMap.get(fid);
+      if (!mapping) {
+        return { filename: fid, outlineUrl: "", isImage: false, unavailable: true };
+      }
+      return {
+        filename: mapping.filename,
+        outlineUrl: mapping.outlineUrl,
+        isImage: mapping.isImage,
+      };
+    });
+    return {
+      timestamp: new Date(p.create_at).toISOString(),
+      username: threadUsernames.get(p.user_id) ?? p.user_id,
+      message: p.message,
+      attachments,
+    };
+  });
+
   const newEntry = {
     isoTimestamp: nowIso,
     triggeredByUsername: triggeringUsername,
     permalinkUrl: permalink,
-    threadMessages,
+    threadMessages: threadMessagesWithAttachments,
   };
 
   let existingTopic = findTopicByChannelAndSlug(channelId, topicSlug);

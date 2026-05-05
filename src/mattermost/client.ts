@@ -11,6 +11,7 @@ export interface Post {
   message: string;
   type: string;
   props: Record<string, unknown>;
+  file_ids?: string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -124,5 +125,66 @@ export class MattermostClient {
 
   async deletePost(postId: string): Promise<void> {
     await this.request<void>("DELETE", `/posts/${postId}`);
+  }
+
+  async getFileInfo(fileId: string): Promise<{
+    id: string;
+    name: string;
+    mime_type: string;
+    size: number;
+    [key: string]: unknown;
+  }> {
+    return this.request(`GET`, `/files/${fileId}/info`);
+  }
+
+  async getFileBlob(fileId: string): Promise<{
+    buffer: Buffer;
+    mimeType: string;
+    size: number;
+    name: string;
+  }> {
+    const url = `${this.baseUrl}/api/v4/files/${fileId}`;
+    return retryWithBackoff(
+      async () => {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${this.token}` },
+        });
+
+        if (res.status === 401) {
+          const text = await res.text();
+          throw new MattermostAuthError(`Authentication failed (401): ${text}`);
+        }
+
+        if (!res.ok) {
+          const text = await res.text();
+          throw new HttpError(res.status, text, `HTTP GET /files/${fileId}: ${text}`);
+        }
+
+        const arrayBuffer = await res.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        const contentType = res.headers.get("Content-Type") ?? "";
+        const mimeType = contentType.split(";")[0]?.trim() ?? "application/octet-stream";
+
+        const disposition = res.headers.get("Content-Disposition") ?? "";
+        const filenameMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+        let name = filenameMatch?.[1]?.trim() ?? "";
+        if (!name) {
+          // Fall back to file info endpoint for the filename
+          const info = await this.getFileInfo(fileId);
+          name = info.name;
+        }
+
+        return { buffer, mimeType, size: buffer.length, name };
+      },
+      {
+        shouldRetry: (err) => {
+          if (err instanceof MattermostAuthError) return false;
+          if (err instanceof HttpError) return err.status === 429 || err.status >= 500;
+          return false;
+        },
+      },
+    );
   }
 }
