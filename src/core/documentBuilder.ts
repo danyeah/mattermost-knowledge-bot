@@ -46,7 +46,7 @@ function renderEntry(entry: ChronologicalEntry): string {
       } else if (att.isImage) {
         lines.push(`> ![${att.filename}](${att.outlineUrl})`);
       } else {
-        lines.push(`> [📎 ${att.filename}](${att.outlineUrl})`);
+        lines.push(`> [${att.filename}](${att.outlineUrl})`);
       }
     }
   }

@@ -125,15 +125,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     ctx: { mmClient, outlineClient, logger },
   });
 
-  // AI receives text only — no attachment info.
-  const threadMessages = thread.map((p) => ({
-    timestamp: new Date(p.create_at).toISOString(),
-    username: threadUsernames.get(p.user_id) ?? p.user_id,
-    message: p.message,
-  }));
-
-  // Chronological log entries include attachment embeds.
-  const threadMessagesWithAttachments = thread.map((p) => {
+  const threadMessagesFull = thread.map((p) => {
     const attachments: MessageAttachment[] = (p.file_ids ?? []).map((fid) => {
       const mapping = attachmentMap.get(fid);
       if (!mapping) {
@@ -157,8 +149,15 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     isoTimestamp: nowIso,
     triggeredByUsername: triggeringUsername,
     permalinkUrl: permalink,
-    threadMessages: threadMessagesWithAttachments,
+    threadMessages: threadMessagesFull,
   };
+
+  // AI receives text only — strip attachments.
+  const threadMessages = threadMessagesFull.map(({ timestamp, username, message }) => ({
+    timestamp,
+    username,
+    message,
+  }));
 
   let existingTopic = findTopicByChannelAndSlug(channelId, topicSlug);
   let resolvedTopic!: TopicRow;

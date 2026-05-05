@@ -7,7 +7,7 @@ export interface RetryOpts {
   shouldRetry?: (err: unknown) => boolean;
 }
 
-function isNetworkError(err: unknown): boolean {
+export function isNetworkError(err: unknown): boolean {
   if (err instanceof TypeError && err.message.includes("fetch")) return true;
   if (err instanceof Error) {
     const msg = err.message.toLowerCase();

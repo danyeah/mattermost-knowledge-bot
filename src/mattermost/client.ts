@@ -43,6 +43,23 @@ export interface Thread {
   posts: Record<string, Post>;
 }
 
+export interface FileInfo {
+  id: string;
+  user_id: string;
+  post_id: string;
+  channel_id: string;
+  create_at: number;
+  update_at: number;
+  delete_at: number;
+  name: string;
+  extension: string;
+  size: number;
+  mime_type: string;
+  width?: number;
+  height?: number;
+  has_preview_image?: boolean;
+}
+
 export class MattermostAuthError extends Error {
   constructor(message: string) {
     super(message);
@@ -127,13 +144,7 @@ export class MattermostClient {
     await this.request<void>("DELETE", `/posts/${postId}`);
   }
 
-  async getFileInfo(fileId: string): Promise<{
-    id: string;
-    name: string;
-    mime_type: string;
-    size: number;
-    [key: string]: unknown;
-  }> {
+  async getFileInfo(fileId: string): Promise<FileInfo> {
     return this.request(`GET`, `/files/${fileId}/info`);
   }
 
@@ -168,10 +179,17 @@ export class MattermostClient {
         const mimeType = contentType.split(";")[0]?.trim() ?? "application/octet-stream";
 
         const disposition = res.headers.get("Content-Disposition") ?? "";
-        const filenameMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
-        let name = filenameMatch?.[1]?.trim() ?? "";
+        let name = "";
+        const rfc5987Match = disposition.match(/filename\*=(?:UTF-8'')?(?<enc>[^;\s]+)/i);
+        if (rfc5987Match?.groups?.enc) {
+          name = decodeURIComponent(rfc5987Match.groups.enc.replace(/^["']|["']$/g, ""));
+        } else {
+          const plainMatch = disposition.match(/filename="?(?<plain>[^";]+)"?/i);
+          if (plainMatch?.groups?.plain) {
+            name = plainMatch.groups.plain.trim();
+          }
+        }
         if (!name) {
-          // Fall back to file info endpoint for the filename
           const info = await this.getFileInfo(fileId);
           name = info.name;
         }

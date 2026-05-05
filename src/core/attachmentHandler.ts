@@ -28,36 +28,33 @@ export async function processThreadAttachments(opts: {
 
   const result = new Map<string, AttachmentMapping>();
 
-  await Promise.all(
-    [...uniqueFileIds].map(async (fileId) => {
-      try {
-        const blob = await mmClient.getFileBlob(fileId);
-        const attachment = await uploadAttachment(outlineClient, {
-          buffer: blob.buffer,
-          filename: blob.name,
-          mimeType: blob.mimeType,
-          size: blob.size,
-        });
+  for (const fileId of uniqueFileIds) {
+    try {
+      const download = await mmClient.getFileBlob(fileId);
+      const attachment = await uploadAttachment(outlineClient, {
+        buffer: download.buffer,
+        filename: download.name,
+        mimeType: download.mimeType,
+        size: download.size,
+      });
 
-        const isImage = blob.mimeType.startsWith("image/");
+      const isImage = download.mimeType.startsWith("image/");
 
-        // Resolve relative URLs to absolute using the configured Outline base URL
-        const outlineUrl = attachment.url.startsWith("/")
-          ? `${config.OUTLINE_URL.replace(/\/$/, "")}${attachment.url}`
-          : attachment.url;
+      const outlineUrl = attachment.url.startsWith("/")
+        ? `${config.OUTLINE_URL.replace(/\/$/, "")}${attachment.url}`
+        : attachment.url;
 
-        result.set(fileId, {
-          fileId,
-          outlineUrl,
-          filename: blob.name,
-          mimeType: blob.mimeType,
-          isImage,
-        });
-      } catch (err) {
-        logger.warn({ err, fileId }, "attachment_process_failed");
-      }
-    }),
-  );
+      result.set(fileId, {
+        fileId,
+        outlineUrl,
+        filename: download.name,
+        mimeType: download.mimeType,
+        isImage,
+      });
+    } catch (err) {
+      logger.warn({ err, fileId }, "attachment_process_failed");
+    }
+  }
 
   return result;
 }

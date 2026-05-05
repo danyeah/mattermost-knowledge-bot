@@ -1,5 +1,5 @@
 import type { OutlineClient } from "./client.js";
-import { retryWithBackoff, HttpError } from "../utils/retry.js";
+import { retryWithBackoff, HttpError, isNetworkError } from "../utils/retry.js";
 import { config } from "../config.js";
 
 export interface OutlineAttachment {
@@ -48,7 +48,7 @@ export async function uploadAttachment(
   for (const [key, value] of Object.entries(form)) {
     formData.append(key, value);
   }
-  formData.append("file", new Blob([buffer], { type: mimeType }), filename);
+  formData.append("file", new Blob([new Uint8Array(buffer)], { type: mimeType }), filename);
 
   await retryWithBackoff(
     async () => {
@@ -64,10 +64,8 @@ export async function uploadAttachment(
     },
     {
       shouldRetry: (err) => {
-        if (err instanceof HttpError) return err.status >= 500;
-        // Retry network-level errors only; presigned 4xx means bad signature — don't retry
-        if (err instanceof TypeError) return true;
-        return false;
+        if (err instanceof HttpError) return err.status === 429 || err.status >= 500;
+        return isNetworkError(err);
       },
     },
   );
