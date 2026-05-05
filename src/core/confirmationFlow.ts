@@ -13,7 +13,6 @@ import { findTopicByChannelAndSlug } from "../db/repositories/topics.js";
 import { executeSave } from "./saveFlow.js";
 import { toDisplayName } from "../ai/topicDetection.js";
 import { formatUserError } from "../utils/errorMessage.js";
-import { withChannelLock } from "../utils/locks.js";
 
 interface ConfirmationCtx {
   mmClient: MattermostClient;
@@ -184,60 +183,61 @@ export async function resumeFromConfirmation(opts: ResumeOpts): Promise<void> {
 
   const threadUsernames = new Map(Object.entries(payload.threadUsernamesObj));
 
-  await withChannelLock(payload.channelId, async () => {
-    try {
-      const {
-        documentUrl,
-        topicDisplayName: finalDisplayName,
-        channelDisplayName,
-        changeSummary,
-      } = await executeSave({
-        triggeringPost: payload.triggeringPost,
-        triggeringUsername: payload.triggeringUsername,
-        thread: payload.thread as Post[],
-        threadUsernames,
-        channelId: payload.channelId,
-        teamName: payload.teamName,
-        topicSlug,
-        topicDisplayName,
-        ctx: { mmClient, outlineClient, logger },
-      });
+  // Callers (reactionAdded handler, posted Path B) already hold the per-channel
+  // lock; nesting another withChannelLock here on the same channel deadlocks
+  // because the inner lock chains onto the outer's still-pending promise.
+  try {
+    const {
+      documentUrl,
+      topicDisplayName: finalDisplayName,
+      channelDisplayName,
+      changeSummary,
+    } = await executeSave({
+      triggeringPost: payload.triggeringPost,
+      triggeringUsername: payload.triggeringUsername,
+      thread: payload.thread as Post[],
+      threadUsernames,
+      channelId: payload.channelId,
+      teamName: payload.teamName,
+      topicSlug,
+      topicDisplayName,
+      ctx: { mmClient, outlineClient, logger },
+    });
 
+    await mmClient.createPost({
+      channel_id: payload.channelId,
+      root_id: payload.triggeringPost.root_id || payload.triggeringPost.id,
+      message: `✅ Saved to **${finalDisplayName}** in [${channelDisplayName}](${documentUrl})\n_${changeSummary}_`,
+    });
+
+    deletePendingById(pending.id);
+
+    logger.info(
+      {
+        pending_id: pending.id,
+        topic_slug: topicSlug,
+        document_url: documentUrl,
+        override: Boolean(newTopicSlugOverride),
+      },
+      "confirmation_resolved",
+    );
+  } catch (err) {
+    logger.error({ err, pending_id: pending.id }, "confirmation_resume_failed");
+    const shortError = formatUserError(err);
+    try {
       await mmClient.createPost({
         channel_id: payload.channelId,
         root_id: payload.triggeringPost.root_id || payload.triggeringPost.id,
-        message: `✅ Saved to **${finalDisplayName}** in [${channelDisplayName}](${documentUrl})\n_${changeSummary}_`,
+        message: `⚠️ Sorry, something went wrong saving this thread: ${shortError}`,
       });
-
-      deletePendingById(pending.id);
-
-      logger.info(
-        {
-          pending_id: pending.id,
-          topic_slug: topicSlug,
-          document_url: documentUrl,
-          override: Boolean(newTopicSlugOverride),
-        },
-        "confirmation_resolved",
-      );
-    } catch (err) {
-      logger.error({ err, pending_id: pending.id }, "confirmation_resume_failed");
-      const shortError = formatUserError(err);
-      try {
-        await mmClient.createPost({
-          channel_id: payload.channelId,
-          root_id: payload.triggeringPost.root_id || payload.triggeringPost.id,
-          message: `⚠️ Sorry, something went wrong saving this thread: ${shortError}`,
-        });
-      } catch (replyErr) {
-        logger.error({ err: replyErr }, "confirmation_resume_reply_failed");
-      }
-      // The saves UNIQUE(mm_post_id) guard blocks any retry, so retaining the row would only let
-      // TTL cleanup nag without ever resolving.
-      deletePendingById(pending.id);
-      throw err;
+    } catch (replyErr) {
+      logger.error({ err: replyErr }, "confirmation_resume_reply_failed");
     }
-  });
+    // The saves UNIQUE(mm_post_id) guard blocks any retry, so retaining the row would only let
+    // TTL cleanup nag without ever resolving.
+    deletePendingById(pending.id);
+    throw err;
+  }
 }
 
 export const CONFIRMATION_TTL_MINUTES = config.CONFIRMATION_TTL_MINUTES;
