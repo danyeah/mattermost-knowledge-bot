@@ -48,3 +48,7 @@ export async function updateDocument(
   }
   return res;
 }
+
+export async function deleteDocument(client: OutlineClient, id: string): Promise<void> {
+  await client.post("/documents.delete", { id, permanent: true });
+}

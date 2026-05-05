@@ -48,15 +48,14 @@ Rules:
 - "change_summary" is a single sentence describing the net change, used in
   Mattermost reply and audit logs.`;
 
-// The placeholder rendered to the AI for empty sections; documentBuilder uses `_(empty)_`
-// in the file, but we present `(empty)` to the model so it doesn't echo the italic markup.
+// Present plain "(empty)" rather than the italic markup stored in the file,
+// so the model never echoes raw markdown syntax back.
 const EMPTY_PLACEHOLDER = "(empty)";
 
 function renderForPrompt(section: string | null): string {
   if (section === null) return EMPTY_PLACEHOLDER;
   const trimmed = section.trim();
-  if (!trimmed || trimmed === "_(empty)_") return EMPTY_PLACEHOLDER;
-  return trimmed;
+  return trimmed.length > 0 ? trimmed : EMPTY_PLACEHOLDER;
 }
 
 function buildUserPrompt(input: SectionMergeInput): string {

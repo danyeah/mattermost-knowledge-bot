@@ -266,7 +266,7 @@ ${lastLine}`,
         return;
       }
 
-      const { documentUrl, topicDisplayName, collectionName, changeSummary } = await executeSave({
+      const { documentUrl, topicDisplayName, channelDisplayName, changeSummary } = await executeSave({
         triggeringPost: post,
         triggeringUsername,
         thread,
@@ -284,7 +284,7 @@ ${lastLine}`,
       await client.createPost({
         channel_id: post.channel_id,
         root_id: post.root_id,
-        message: `✅ Saved to **${topicDisplayName}** in [${collectionName}](${documentUrl})\n_${changeSummary}_`,
+        message: `✅ Saved to **${topicDisplayName}** in [${channelDisplayName}](${documentUrl})\n_${changeSummary}_`,
       });
       logger.info({ channel_id: post.channel_id, root_id: post.root_id, document_url: documentUrl }, "save_completed");
     } catch (err) {

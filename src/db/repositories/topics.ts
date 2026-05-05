@@ -47,5 +47,6 @@ export function touchTopic(topicId: number): void {
 }
 
 export function updateTopicSummary(topicId: number, summary: string | null): void {
-  updateTopicSummaryStmt.run(summary, topicId);
+  const result = updateTopicSummaryStmt.run(summary, topicId);
+  if (result.changes === 0) throw new Error(`updateTopicSummary: topic ${topicId} not found`);
 }

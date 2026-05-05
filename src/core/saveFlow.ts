@@ -10,9 +10,11 @@ import {
   insertTopic,
   touchTopic,
   updateTopicSummary,
+  type TopicRow,
 } from "../db/repositories/topics.js";
-import { createDocument, getDocument, updateDocument } from "../outline/documents.js";
+import { createDocument, deleteDocument, getDocument, updateDocument } from "../outline/documents.js";
 import { buildDocument, parseExisting, type DocumentSections } from "./documentBuilder.js";
+import type { SectionMerge } from "../ai/schemas.js";
 import { buildPermalink } from "../mattermost/helpers.js";
 import { mergeSections } from "../ai/sectionMerge.js";
 
@@ -37,7 +39,7 @@ interface SaveFlowOpts {
 export interface SaveFlowResult {
   documentUrl: string;
   topicDisplayName: string;
-  collectionName: string;
+  channelDisplayName: string;
   changeSummary: string;
 }
 
@@ -62,18 +64,21 @@ const EMPTY_SECTIONS: DocumentSections = {
   references: null,
 };
 
-// Apply the AI merge result onto the prior section state. Non-null fields REPLACE,
-// null fields KEEP. This is the single source of truth for the merge semantics.
-function applyMerge(
-  prior: DocumentSections,
-  merge: { summary: string | null; decisions: string | null; technical_details: string | null; operational_notes: string | null; references: string | null },
-): DocumentSections {
+function pickSection(merged: string | null, prior: string | null): string | null {
+  if (merged === null) return prior;
+  const trimmed = merged.trim();
+  return trimmed.length > 0 ? merged : prior;
+}
+
+// Apply the AI merge result onto the prior section state. Non-null, non-empty fields REPLACE;
+// null or whitespace-only means "keep existing" to guard against AI returning empty strings.
+function applyMerge(prior: DocumentSections, merge: SectionMerge): DocumentSections {
   return {
-    summary: merge.summary !== null ? merge.summary : prior.summary,
-    decisions: merge.decisions !== null ? merge.decisions : prior.decisions,
-    technical_details: merge.technical_details !== null ? merge.technical_details : prior.technical_details,
-    operational_notes: merge.operational_notes !== null ? merge.operational_notes : prior.operational_notes,
-    references: merge.references !== null ? merge.references : prior.references,
+    summary: pickSection(merge.summary, prior.summary),
+    decisions: pickSection(merge.decisions, prior.decisions),
+    technical_details: pickSection(merge.technical_details, prior.technical_details),
+    operational_notes: pickSection(merge.operational_notes, prior.operational_notes),
+    references: pickSection(merge.references, prior.references),
   };
 }
 
@@ -127,6 +132,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
   };
 
   let existingTopic = findTopicByChannelAndSlug(channelId, topicSlug);
+  let resolvedTopic!: TopicRow;
   let documentId: string;
   let documentUrlId: string | undefined;
   let changeSummary: string;
@@ -155,7 +161,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
       threadMessages,
     });
     changeSummary = merge.change_summary;
-    if (merge.summary !== null) mergedSummaryForTopic = merge.summary;
+    if (merge.summary !== null && merge.summary.trim().length > 0) mergedSummaryForTopic = merge.summary;
 
     const mergedSections = applyMerge(priorSections, merge);
 
@@ -177,23 +183,42 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
       documentUrlId = created.urlId;
 
       // Insert the topic only after the Outline document exists, so the row never points to a missing doc.
-      existingTopic = insertTopic({
-        mm_channel_id: channelId,
-        topic_slug: topicSlug,
-        topic_display_name: topicDisplayName,
-        outline_document_id: documentId,
-        summary: mergedSummaryForTopic,
-      });
+      // Re-check for a race winner before inserting to avoid UNIQUE(mm_channel_id, topic_slug) violation.
+      const raceWinner = findTopicByChannelAndSlug(channelId, topicSlug);
+      if (raceWinner) {
+        logger.warn(
+          { document_id: created.id, winning_document_id: raceWinner.outline_document_id, topic_slug: topicSlug },
+          "topic_slug_race_detected_deleting_orphan",
+        );
+        try {
+          await deleteDocument(outlineClient, created.id);
+        } catch (delErr) {
+          logger.error({ err: delErr, document_id: created.id }, "orphan_document_delete_failed");
+        }
+        throw new Error("Another save raced ahead — please retry.");
+      }
+
+      db.transaction(() => {
+        resolvedTopic = insertTopic({
+          mm_channel_id: channelId,
+          topic_slug: topicSlug,
+          topic_display_name: topicDisplayName,
+          outline_document_id: documentId,
+          summary: mergedSummaryForTopic,
+        });
+        updateSaveSuccessStmt.run(resolvedTopic.id, saveId);
+      })();
 
       logger.info(
         { document_id: documentId, channel_id: channelId, topic_slug: topicSlug },
         "outline_document_created",
       );
     } else {
-      documentId = existingTopic.outline_document_id;
+      resolvedTopic = existingTopic;
+      documentId = resolvedTopic.outline_document_id;
 
       const updatedMarkdown = buildDocument({
-        topicDisplayName: existingTopic.topic_display_name,
+        topicDisplayName: resolvedTopic.topic_display_name,
         lastAiUpdateIso: nowIso,
         sections: mergedSections,
         chronologicalLog: [],
@@ -204,11 +229,14 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
       const updated = await updateDocument(outlineClient, { id: documentId, text: updatedMarkdown });
       if (updated.urlId) documentUrlId = updated.urlId;
 
-      if (mergedSummaryForTopic !== null) {
-        updateTopicSummary(existingTopic.id, mergedSummaryForTopic);
-      } else {
-        touchTopic(existingTopic.id);
-      }
+      db.transaction(() => {
+        if (mergedSummaryForTopic !== null) {
+          updateTopicSummary(resolvedTopic.id, mergedSummaryForTopic);
+        } else {
+          touchTopic(resolvedTopic.id);
+        }
+        updateSaveSuccessStmt.run(resolvedTopic.id, saveId);
+      })();
 
       logger.info(
         { document_id: documentId, channel_id: channelId, topic_slug: topicSlug },
@@ -220,13 +248,11 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     throw err;
   }
 
-  updateSaveSuccessStmt.run(existingTopic.id, saveId);
-
   const documentUrl = `${config.OUTLINE_URL}/doc/${documentUrlId ?? documentId}`;
   return {
     documentUrl,
-    topicDisplayName: existingTopic.topic_display_name,
-    collectionName: channel.mm_channel_name,
+    topicDisplayName: resolvedTopic.topic_display_name,
+    channelDisplayName: channel.mm_channel_name,
     changeSummary,
   };
 }
