@@ -9,10 +9,6 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Returns true if the text contains a @mention matching any of the given triggers.
- * afterMention is the text after the first matched mention, trimmed.
- */
 export function parseMention(text: string, triggers: string[]): MentionResult {
   if (triggers.length === 0) return { mentioned: false, afterMention: "" };
 
@@ -27,25 +23,16 @@ export function parseMention(text: string, triggers: string[]): MentionResult {
   return { mentioned: true, afterMention };
 }
 
-/**
- * Builds a Mattermost permalink URL for a given post.
- */
 export function buildPermalink(mmUrl: string, teamName: string, postId: string): string {
   return `${mmUrl}/${teamName}/pl/${postId}`;
 }
 
-/**
- * Finds the first #hashtag (kebab-case slug) in text and returns the slug without #.
- * Returns null if none found.
- */
+// (?:^|\s) prevents matching mid-word (e.g. foo#bar must not match); must start with a letter per kebab-case ASCII spec
 export function extractFirstHashtag(text: string): string | null {
-  const match = /#([a-z][a-z0-9-]*)/.exec(text);
+  const match = /(?:^|\s)#([a-z][a-z0-9-]*)/.exec(text);
   return match ? (match[1] ?? null) : null;
 }
 
-/**
- * Sorts thread posts by create_at ascending, using the order array as a fallback tiebreaker.
- */
 export function sortThreadPosts(thread: { order: string[]; posts: Record<string, Post> }): Post[] {
   return thread.order
     .map((id) => thread.posts[id])

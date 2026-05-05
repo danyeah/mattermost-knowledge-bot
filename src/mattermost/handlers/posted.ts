@@ -16,7 +16,6 @@ type PostedEvent = Extract<WsEvent, { event: "posted" }>;
 export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<void> {
   const { client, config, logger, botUserId } = ctx;
 
-  // 1. Parse the post JSON string
   let post: Post;
   try {
     post = JSON.parse(event.data.post) as Post;
@@ -25,18 +24,14 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
     return;
   }
 
-  // 2. Ignore the bot's own posts
   if (post.user_id === botUserId) return;
 
-  // 3. For Phase 1, only handle thread replies (root_id is set)
   if (!post.root_id) return;
 
-  // 4. Check for mention — either explicit @mention in text or in props.mentions array
   const { mentioned } = parseMention(post.message, config.BOT_TRIGGER_MENTIONS);
 
   let mentionedViaProps = false;
   if (!mentioned) {
-    // props.mentions may be a JSON string or array
     const rawMentions = post.props["mentions"];
     if (rawMentions !== undefined) {
       let mentions: unknown = rawMentions;
@@ -60,12 +55,10 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
     "posted_bot_mentioned",
   );
 
-  // 5. Fetch and log thread contents
   try {
     const thread = await client.getThread(post.root_id);
     const posts = sortThreadPosts(thread);
 
-    // Resolve usernames for all unique user IDs in the thread
     const userIds = [...new Set(posts.map((p) => p.user_id))];
     const usersArr = await client.getUsersByIds(userIds);
     const userMap = new Map(usersArr.map((u) => [u.id, u.username]));
@@ -82,7 +75,6 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
     logger.error({ err, root_id: post.root_id }, "thread_fetch_failed");
   }
 
-  // 6. Reply in thread
   try {
     await client.createPost({
       channel_id: post.channel_id,

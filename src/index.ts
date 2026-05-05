@@ -13,7 +13,6 @@ async function main(): Promise<void> {
     "bot_started",
   );
 
-  // 1. Run DB migrations
   runMigrations();
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -21,10 +20,8 @@ async function main(): Promise<void> {
     .map((r) => (r as { name: string }).name);
   logger.info({ tables }, "db_ready");
 
-  // 2. Create Mattermost REST client
   const client = new MattermostClient(config.MM_URL, config.MM_BOT_TOKEN, logger);
 
-  // 3. Resolve bot user ID (from config or API)
   let botUserId = config.MM_BOT_USER_ID;
   if (!botUserId) {
     const me = await client.me();
@@ -35,7 +32,6 @@ async function main(): Promise<void> {
     );
   }
 
-  // 4. Discover primary team for permalink building
   let teamName = "";
   try {
     const teams = await client.getMyTeams();
@@ -50,7 +46,6 @@ async function main(): Promise<void> {
     logger.error({ err }, "team_fetch_failed");
   }
 
-  // 5. Build WS event dispatcher
   function dispatch(event: WsEvent): void {
     logger.debug({ event: event.event }, "ws_event_received");
 
@@ -60,7 +55,6 @@ async function main(): Promise<void> {
       try {
         switch (event.event) {
           case "posted":
-            // Safe: switch narrowed by event.event literal
             await handlePosted(event as Extract<WsEvent, { event: "posted" }>, ctx);
             break;
 
@@ -81,7 +75,6 @@ async function main(): Promise<void> {
     })();
   }
 
-  // 6. Start WebSocket connection
   const ws = new MattermostWebSocket({
     url: config.MM_URL,
     token: config.MM_BOT_TOKEN,
@@ -89,14 +82,13 @@ async function main(): Promise<void> {
     dispatch,
   });
 
-  // Register shutdown before starting the WS loop so signals are handled cleanly
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "shutdown");
     ws.close();
     try {
       db.close();
-    } catch {
-      // ignore
+    } catch (err) {
+      logger.error({ err }, "db_close_failed");
     }
     process.exit(0);
   };

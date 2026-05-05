@@ -49,56 +49,47 @@ export class MattermostAuthError extends Error {
   }
 }
 
-function isRetryableStatus(status: number): boolean {
-  return status === 429 || status >= 500;
-}
-
 export class MattermostClient {
   private readonly baseUrl: string;
   private readonly token: string;
-  private readonly log: Logger;
+  private readonly logger: Logger;
 
-  constructor(baseUrl: string, token: string, log: Logger) {
-    // Normalize: strip trailing slash
+  constructor(baseUrl: string, token: string, logger: Logger) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.token = token;
-    this.log = log;
+    this.logger = logger;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${this.baseUrl}/api/v4${path}`;
-    return retryWithBackoff(
-      async () => {
-        const res = await fetch(url, {
-          method,
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-            "Content-Type": "application/json",
-          },
-          body: body !== undefined ? JSON.stringify(body) : undefined,
-        });
-
-        if (res.status === 401) {
-          const text = await res.text();
-          throw new MattermostAuthError(`Authentication failed (401): ${text}`);
-        }
-
-        if (!res.ok) {
-          const text = await res.text();
-          throw new HttpError(res.status, text, `HTTP ${res.status} ${method} ${path}: ${text}`);
-        }
-
-        return res.json() as Promise<T>;
-      },
-      {
-        shouldRetry: (err) => {
-          if (err instanceof MattermostAuthError) return false; // fatal
-          if (err instanceof HttpError) return isRetryableStatus(err.status);
-          // Network errors
-          return err instanceof TypeError;
+    return retryWithBackoff(async () => {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          "Content-Type": "application/json",
         },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+
+      if (res.status === 401) {
+        const text = await res.text();
+        throw new MattermostAuthError(`Authentication failed (401): ${text}`);
+      }
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new HttpError(res.status, text, `HTTP ${res.status} ${method} ${path}: ${text}`);
+      }
+
+      return res.json() as Promise<T>;
+    }, {
+      shouldRetry: (err) => {
+        if (err instanceof MattermostAuthError) return false;
+        if (err instanceof HttpError) return err.status === 429 || err.status >= 500;
+        return false;
       },
-    );
+    });
   }
 
   async me(): Promise<User> {
@@ -118,6 +109,7 @@ export class MattermostClient {
   }
 
   async getUsersByIds(ids: string[]): Promise<User[]> {
+    if (ids.length === 0) return [];
     return this.request<User[]>("POST", "/users/ids", ids);
   }
 
@@ -126,7 +118,7 @@ export class MattermostClient {
   }
 
   async createPost(params: { channel_id: string; message: string; root_id?: string }): Promise<Post> {
-    this.log.debug({ channel_id: params.channel_id, root_id: params.root_id }, "create_post");
+    this.logger.debug({ channel_id: params.channel_id, root_id: params.root_id }, "create_post");
     return this.request<Post>("POST", "/posts", params);
   }
 }

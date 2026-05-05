@@ -1,20 +1,37 @@
 import WebSocket from "ws";
 import type { Logger } from "../logger.js";
 
-export type WsEvent =
-  | { event: "posted"; data: { post: string; channel_name?: string; sender_name?: string }; broadcast: { channel_id: string; team_id: string } }
-  | { event: "reaction_added"; data: { reaction: string }; broadcast: { channel_id: string } }
-  | { event: "user_added"; data: { user_id: string; team_id: string }; broadcast: { channel_id: string } }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  | { event: string; data: any; broadcast: any }; // catch-all for unhandled event types
+export interface KnownWsEvent {
+  event: "posted";
+  data: { post: string; channel_name?: string; sender_name?: string };
+  broadcast: { channel_id: string; team_id: string };
+}
+
+interface ReactionAddedEvent {
+  event: "reaction_added";
+  data: { reaction: string };
+  broadcast: { channel_id: string };
+}
+
+interface UserAddedEvent {
+  event: "user_added";
+  data: { user_id: string; team_id: string };
+  broadcast: { channel_id: string };
+}
+
+export interface UnknownWsEvent {
+  event: string;
+  data: unknown;
+  broadcast: unknown;
+}
+
+export type WsEvent = KnownWsEvent | ReactionAddedEvent | UserAddedEvent | UnknownWsEvent;
 
 interface WsMessage {
   seq_reply?: number;
   event?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  data?: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  broadcast?: any;
+  data?: unknown;
+  broadcast?: unknown;
   status?: string;
 }
 
@@ -43,7 +60,6 @@ export class MattermostWebSocket {
   }
 
   connect(): void {
-    // Kick off async connection loop — callers don't await this
     void this.connectionLoop();
   }
 
@@ -67,7 +83,11 @@ export class MattermostWebSocket {
 
   private async connectionLoop(): Promise<void> {
     while (!this.closed) {
-      await this.connectOnce();
+      try {
+        await this.connectOnce();
+      } catch (err) {
+        this.opts.logger.error({ err }, "ws_loop_error");
+      }
       if (this.closed) break;
 
       const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempt), RECONNECT_MAX_MS);
@@ -82,7 +102,14 @@ export class MattermostWebSocket {
       const wsUrl = this.opts.url.replace(/^http/, "ws") + "/api/v4/websocket";
       this.opts.logger.info({ url: wsUrl }, "ws_connecting");
 
-      const ws = new WebSocket(wsUrl);
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (err) {
+        this.opts.logger.error({ err }, "ws_constructor_failed");
+        resolve();
+        return;
+      }
       this.ws = ws;
 
       let authenticated = false;
@@ -90,6 +117,7 @@ export class MattermostWebSocket {
 
       const resetNoMessageTimer = (): void => {
         if (this.noMessageTimer) clearTimeout(this.noMessageTimer);
+        // no-message timeout forces reconnect because Mattermost can drop the WS silently
         this.noMessageTimer = setTimeout(() => {
           this.opts.logger.warn("ws_no_message_timeout — forcing reconnect");
           ws.terminate();
@@ -97,6 +125,7 @@ export class MattermostWebSocket {
       };
 
       ws.on("open", () => {
+        this.cleanup();
         this.opts.logger.debug("ws_open — sending auth challenge");
         ws.send(
           JSON.stringify({
@@ -107,7 +136,6 @@ export class MattermostWebSocket {
         );
         resetNoMessageTimer();
 
-        // Heartbeat — ping Mattermost every 30s
         this.heartbeatTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ seq: seq++, action: "ping" }));
@@ -127,7 +155,6 @@ export class MattermostWebSocket {
           return;
         }
 
-        // Auth ack: seq_reply with status OK
         if (msg.seq_reply !== undefined && msg.status === "OK") {
           if (!authenticated) {
             authenticated = true;
@@ -138,20 +165,17 @@ export class MattermostWebSocket {
 
         const event = msg.event;
 
-        // Hello event — connection established and authenticated by server
         if (event === "hello") {
-          this.reconnectAttempt = 0; // reset backoff on successful hello
+          this.reconnectAttempt = 0;
           this.opts.logger.info("ws_connected");
           return;
         }
 
-        // Skip internal pong / status events
         if (event === "pong" || !event) {
           this.opts.logger.debug({ msg }, "ws_internal_event");
           return;
         }
 
-        // Dispatch to caller
         const wsEvent: WsEvent = {
           event,
           data: msg.data,
