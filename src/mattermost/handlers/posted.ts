@@ -3,11 +3,22 @@ import type { MattermostClient, Post } from "../client.js";
 import type { OutlineClient } from "../../outline/client.js";
 import type { Config } from "../../config.js";
 import type { Logger } from "../../logger.js";
-import { parseMention, sortThreadPosts } from "../helpers.js";
+import { parseMention, sortThreadPosts, extractFirstHashtag } from "../helpers.js";
 import { findChannelByMmId } from "../../db/repositories/channels.js";
+import { listTopicsByChannel } from "../../db/repositories/topics.js";
+import {
+  findActivePendingByThreadRoot,
+  deletePendingById,
+} from "../../db/repositories/pendingConfirmations.js";
 import { db } from "../../db/index.js";
 import { executeSave } from "../../core/saveFlow.js";
 import { withChannelLock } from "../../utils/locks.js";
+import { parseCommand } from "../../core/commandParser.js";
+import { detectTopic, toDisplayName } from "../../ai/topicDetection.js";
+import {
+  requestConfirmation,
+  resumeFromConfirmation,
+} from "../../core/confirmationFlow.js";
 
 interface PostedCtx {
   client: MattermostClient;
@@ -21,6 +32,51 @@ interface PostedCtx {
 type PostedEvent = Extract<WsEvent, { event: "posted" }>;
 
 const checkExistingSaveStmt = db.prepare("SELECT id FROM saves WHERE mm_post_id = ?");
+const lastSuccessfulSaveStmt = db.prepare(
+  `SELECT s.created_at AS created_at, s.triggered_by_username AS username, t.topic_display_name AS topic_display_name
+   FROM saves s LEFT JOIN topics t ON t.id = s.topic_id
+   WHERE s.mm_channel_id = ? AND s.status = 'success'
+   ORDER BY s.id DESC LIMIT 1`,
+);
+
+async function handleHashtagOverrideForPending(
+  post: Post,
+  ctx: PostedCtx,
+): Promise<boolean> {
+  const trimmed = post.message.trim();
+  if (!trimmed.startsWith("#")) return false;
+
+  const hashtag = extractFirstHashtag(trimmed);
+  if (!hashtag) return false;
+
+  const pending = findActivePendingByThreadRoot(post.root_id);
+  if (!pending) return false;
+
+  // Avoid resuming twice if the user happened to react before replying.
+  if (pending.triggered_by_user_id !== post.user_id) {
+    ctx.logger.debug(
+      { pending_id: pending.id, replied_by: post.user_id, original: pending.triggered_by_user_id },
+      "hashtag_override_ignored_different_user",
+    );
+    return false;
+  }
+
+  ctx.logger.info(
+    { pending_id: pending.id, hashtag },
+    "confirmation_hashtag_override",
+  );
+
+  await withChannelLock(post.channel_id, async () => {
+    await resumeFromConfirmation({
+      pending,
+      newTopicSlugOverride: hashtag,
+      newTopicDisplayNameOverride: toDisplayName(hashtag),
+      ctx: { mmClient: ctx.client, outlineClient: ctx.outlineClient, logger: ctx.logger },
+    });
+  });
+
+  return true;
+}
 
 export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<void> {
   const { client, outlineClient, config, logger, botUserId, teamName } = ctx;
@@ -34,10 +90,19 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
   }
 
   if (post.user_id === botUserId) return;
-
   if (!post.root_id) return;
 
-  const { mentioned } = parseMention(post.message, config.BOT_TRIGGER_MENTIONS);
+  // Path B (confirmation flow): user replies in the thread with `#topic-name` to override the proposed topic.
+  // This must be checked before mention parsing because the override reply doesn't necessarily mention the bot.
+  try {
+    const handled = await handleHashtagOverrideForPending(post, ctx);
+    if (handled) return;
+  } catch (err) {
+    logger.error({ err }, "hashtag_override_failed");
+    return;
+  }
+
+  const { mentioned, afterMention } = parseMention(post.message, config.BOT_TRIGGER_MENTIONS);
 
   let mentionedViaProps = false;
   if (!mentioned) {
@@ -58,6 +123,9 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
   }
 
   if (!mentioned && !mentionedViaProps) return;
+
+  // Use the parsed afterMention; fall back to the raw message when the mention came in via props.
+  const commandText = mentioned ? afterMention : post.message;
 
   logger.info(
     { post_id: post.id, channel_id: post.channel_id, root_id: post.root_id, user_id: post.user_id },
@@ -81,6 +149,46 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
     return;
   }
 
+  const command = parseCommand(commandText);
+
+  if (command.subcommand === "help") {
+    const collectionUrl = `${config.OUTLINE_URL}/collection/${channelRow.outline_collection_id}`;
+    await client.createPost({
+      channel_id: post.channel_id,
+      root_id: post.root_id,
+      message: `**Knowledge Bot commands:**
+• \`@${config.MM_BOT_USERNAME}\` (in a thread reply) — save the thread, auto-detect topic
+• \`@${config.MM_BOT_USERNAME} #topic-name\` — save with explicit topic
+• \`@${config.MM_BOT_USERNAME} status\` — show this channel's wiki info
+• \`@${config.MM_BOT_USERNAME} help\` — show this message
+
+Documents are stored in Outline: ${collectionUrl}`,
+    });
+    return;
+  }
+
+  if (command.subcommand === "status") {
+    const collectionUrl = `${config.OUTLINE_URL}/collection/${channelRow.outline_collection_id}`;
+    const topicsCount = listTopicsByChannel(post.channel_id).length;
+    const lastSave = lastSuccessfulSaveStmt.get(post.channel_id) as
+      | { created_at: string; username: string; topic_display_name: string | null }
+      | undefined;
+    const lastLine = lastSave
+      ? `Last save: ${lastSave.created_at} by @${lastSave.username} → ${lastSave.topic_display_name ?? "(deleted topic)"}`
+      : "Last save: (none yet)";
+
+    await client.createPost({
+      channel_id: post.channel_id,
+      root_id: post.root_id,
+      message: `📚 **${channelRow.mm_channel_name}** wiki status
+Collection: [${channelRow.mm_channel_name}](${collectionUrl})
+Topics: ${topicsCount}
+${lastLine}`,
+    });
+    return;
+  }
+
+  // Default: subcommand === "save"
   let thread: Post[];
   let userMap: Map<string, string>;
   let triggeringUsername: string;
@@ -108,6 +216,56 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
 
   await withChannelLock(post.channel_id, async () => {
     try {
+      const existingTopics = listTopicsByChannel(post.channel_id).map((t) => ({
+        slug: t.topic_slug,
+        displayName: t.topic_display_name,
+        summary: t.summary,
+      }));
+
+      const threadMessages = thread.map((p) => ({
+        timestamp: new Date(p.create_at).toISOString(),
+        username: userMap.get(p.user_id) ?? p.user_id,
+        message: p.message,
+      }));
+
+      const detection = await detectTopic({
+        channelName: channelRow.mm_channel_name,
+        rawCommand: command.raw,
+        explicitHashtag: command.explicitHashtag,
+        existingTopics,
+        threadMessages,
+      });
+
+      logger.info(
+        {
+          decision: detection.decision,
+          topic_slug: detection.topic_slug,
+          confidence: detection.confidence,
+          explicit_hashtag: command.explicitHashtag,
+        },
+        "topic_detected",
+      );
+
+      const proceedDirectly =
+        command.explicitHashtag !== null ||
+        detection.confidence >= config.CONFIRMATION_CONFIDENCE_THRESHOLD;
+
+      if (!proceedDirectly) {
+        await requestConfirmation({
+          detection,
+          triggeringPost: post,
+          triggeringUsername,
+          thread,
+          threadUsernames: userMap,
+          channelId: post.channel_id,
+          teamName,
+          rawCommand: command.raw,
+          ttlMinutes: config.CONFIRMATION_TTL_MINUTES,
+          ctx: { mmClient: client, outlineClient, logger },
+        });
+        return;
+      }
+
       const { documentUrl, topicDisplayName } = await executeSave({
         triggeringPost: post,
         triggeringUsername,
@@ -115,8 +273,14 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
         threadUsernames: userMap,
         channelId: post.channel_id,
         teamName,
+        topicSlug: detection.topic_slug,
+        topicDisplayName: detection.topic_display_name,
         ctx: { mmClient: client, outlineClient, logger },
       });
+
+      // If a confirmation existed for this thread, drop it now that the user resolved it explicitly.
+      const lingering = findActivePendingByThreadRoot(post.root_id);
+      if (lingering) deletePendingById(lingering.id);
 
       await client.createPost({
         channel_id: post.channel_id,

@@ -7,6 +7,7 @@ import { OutlineClient } from "./outline/client.js";
 import { handlePosted } from "./mattermost/handlers/posted.js";
 import { handleUserAdded } from "./mattermost/handlers/userAdded.js";
 import { handleReactionAdded } from "./mattermost/handlers/reactionAdded.js";
+import { startConfirmationCleanup } from "./jobs/confirmationCleanup.js";
 
 async function main(): Promise<void> {
   logger.info(
@@ -70,7 +71,12 @@ async function main(): Promise<void> {
             break;
 
           case "reaction_added":
-            await handleReactionAdded(event as Extract<WsEvent, { event: "reaction_added" }>, { logger });
+            await handleReactionAdded(event as Extract<WsEvent, { event: "reaction_added" }>, {
+              client,
+              outlineClient,
+              logger,
+              botUserId,
+            });
             break;
 
           default:
@@ -89,8 +95,11 @@ async function main(): Promise<void> {
     dispatch,
   });
 
+  const cleanupJob = startConfirmationCleanup(5, logger);
+
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "shutdown");
+    cleanupJob.stop();
     ws.close();
     try {
       db.close();

@@ -23,6 +23,8 @@ interface SaveFlowOpts {
   threadUsernames: Map<string, string>;
   channelId: string;
   teamName: string;
+  topicSlug: string;
+  topicDisplayName: string;
   ctx: SaveFlowCtx;
 }
 
@@ -40,7 +42,17 @@ const updateSaveFailedStmt = db.prepare(
 );
 
 export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: string; topicDisplayName: string }> {
-  const { triggeringPost, triggeringUsername, thread, threadUsernames, channelId, teamName, ctx } = opts;
+  const {
+    triggeringPost,
+    triggeringUsername,
+    thread,
+    threadUsernames,
+    channelId,
+    teamName,
+    topicSlug,
+    topicDisplayName,
+    ctx,
+  } = opts;
   const { outlineClient, logger } = ctx;
 
   const channel = findChannelByMmId(channelId);
@@ -58,12 +70,9 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
     triggeringPost.root_id || triggeringPost.id,
     triggeringPost.user_id,
     triggeringUsername,
-    JSON.stringify({ thread_post_count: thread.length }),
+    JSON.stringify({ thread_post_count: thread.length, topic_slug: topicSlug }),
   );
   const saveId = saveRow.lastInsertRowid;
-
-  const TOPIC_SLUG = "test-topic";
-  const TOPIC_DISPLAY_NAME = "Test Topic";
 
   const permalink = buildPermalink(config.MM_URL, teamName, triggeringPost.root_id || triggeringPost.id);
   const nowIso = new Date().toISOString();
@@ -81,14 +90,14 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
     threadMessages,
   };
 
-  let existingTopic = findTopicByChannelAndSlug(channelId, TOPIC_SLUG);
+  let existingTopic = findTopicByChannelAndSlug(channelId, topicSlug);
   let documentId: string;
   let documentUrlId: string | undefined;
 
   try {
     if (!existingTopic) {
       const initialMarkdown = buildDocument({
-        topicDisplayName: TOPIC_DISPLAY_NAME,
+        topicDisplayName,
         lastAiUpdateIso: "never",
         sections: {
           summary: null,
@@ -102,7 +111,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
 
       const created = await createDocument(outlineClient, {
         collectionId: channel.outline_collection_id,
-        title: TOPIC_DISPLAY_NAME,
+        title: topicDisplayName,
         text: initialMarkdown,
       });
 
@@ -111,13 +120,13 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
 
       existingTopic = insertTopic({
         mm_channel_id: channelId,
-        topic_slug: TOPIC_SLUG,
-        topic_display_name: TOPIC_DISPLAY_NAME,
+        topic_slug: topicSlug,
+        topic_display_name: topicDisplayName,
         outline_document_id: documentId,
         summary: null,
       });
 
-      logger.info({ document_id: documentId, channel_id: channelId }, "outline_document_created");
+      logger.info({ document_id: documentId, channel_id: channelId, topic_slug: topicSlug }, "outline_document_created");
     } else {
       documentId = existingTopic.outline_document_id;
 
@@ -126,7 +135,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
       const parsed = parseExisting(existing.text);
 
       const updatedMarkdown = buildDocument({
-        topicDisplayName: TOPIC_DISPLAY_NAME,
+        topicDisplayName: existingTopic.topic_display_name,
         lastAiUpdateIso: "never",
         sections: parsed.sections,
         chronologicalLog: [],
@@ -138,7 +147,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
       if (updated.urlId) documentUrlId = updated.urlId;
 
       touchTopic(existingTopic.id);
-      logger.info({ document_id: documentId, channel_id: channelId }, "outline_document_updated");
+      logger.info({ document_id: documentId, channel_id: channelId, topic_slug: topicSlug }, "outline_document_updated");
     }
   } catch (err) {
     updateSaveFailedStmt.run(err instanceof Error ? err.message : String(err), saveId);
@@ -148,5 +157,5 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
   updateSaveSuccessStmt.run(saveId);
 
   const documentUrl = `${config.OUTLINE_URL}/doc/${documentUrlId ?? documentId}`;
-  return { documentUrl, topicDisplayName: TOPIC_DISPLAY_NAME };
+  return { documentUrl, topicDisplayName: existingTopic.topic_display_name };
 }

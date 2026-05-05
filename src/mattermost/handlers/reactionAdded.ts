@@ -1,8 +1,16 @@
 import type { WsEvent } from "../websocket.js";
+import type { MattermostClient } from "../client.js";
+import type { OutlineClient } from "../../outline/client.js";
 import type { Logger } from "../../logger.js";
+import { findPendingByBotReplyId } from "../../db/repositories/pendingConfirmations.js";
+import { resumeFromConfirmation } from "../../core/confirmationFlow.js";
+import { withChannelLock } from "../../utils/locks.js";
 
 interface ReactionAddedCtx {
+  client: MattermostClient;
+  outlineClient: OutlineClient;
   logger: Logger;
+  botUserId: string;
 }
 
 type ReactionAddedEvent = Extract<WsEvent, { event: "reaction_added" }>;
@@ -14,9 +22,10 @@ interface Reaction {
   create_at: number;
 }
 
-// Stub handler — Phase 3 will implement save-to-Outline on specific emoji reactions.
+const CONFIRM_EMOJIS = new Set(["+1", "thumbsup"]);
+
 export async function handleReactionAdded(event: ReactionAddedEvent, ctx: ReactionAddedCtx): Promise<void> {
-  const { logger } = ctx;
+  const { client, outlineClient, logger, botUserId } = ctx;
 
   let reaction: Reaction;
   try {
@@ -26,14 +35,30 @@ export async function handleReactionAdded(event: ReactionAddedEvent, ctx: Reacti
     return;
   }
 
-  logger.debug(
+  if (!CONFIRM_EMOJIS.has(reaction.emoji_name)) return;
+  if (reaction.user_id === botUserId) return;
+
+  const pending = findPendingByBotReplyId(reaction.post_id);
+  if (!pending) return;
+
+  logger.info(
     {
-      user_id: reaction.user_id,
+      pending_id: pending.id,
       post_id: reaction.post_id,
+      user_id: reaction.user_id,
       emoji: reaction.emoji_name,
     },
-    "reaction_added",
+    "confirmation_reaction_received",
   );
 
-  // TODO Phase 3: if emoji matches configured save-trigger (e.g. 📌), start save flow.
+  await withChannelLock(pending.mm_channel_id, async () => {
+    try {
+      await resumeFromConfirmation({
+        pending,
+        ctx: { mmClient: client, outlineClient, logger },
+      });
+    } catch (err) {
+      logger.error({ err, pending_id: pending.id }, "confirmation_reaction_resume_failed");
+    }
+  });
 }
