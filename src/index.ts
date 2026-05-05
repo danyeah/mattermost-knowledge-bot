@@ -118,6 +118,16 @@ async function main(): Promise<void> {
   await new Promise<never>(() => {});
 }
 
+process.on("unhandledRejection", (reason) => {
+  logger.fatal({ reason }, "unhandled_rejection");
+  process.exit(1);
+});
+
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "uncaught_exception");
+  process.exit(1);
+});
+
 main().catch((err) => {
   logger.fatal({ err }, "fatal_error");
   process.exit(1);
