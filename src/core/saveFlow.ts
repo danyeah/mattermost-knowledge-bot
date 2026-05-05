@@ -34,7 +34,7 @@ const insertSaveStmt = db.prepare(
 );
 
 const updateSaveSuccessStmt = db.prepare(
-  `UPDATE saves SET status = 'success', error_message = NULL WHERE id = ?`,
+  `UPDATE saves SET status = 'success', error_message = NULL, topic_id = ? WHERE id = ?`,
 );
 
 const updateSaveFailedStmt = db.prepare(
@@ -62,8 +62,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
     );
   }
 
-  // Insert the saves row early as 'failed' so that on any subsequent failure the idempotency guard
-  // (mm_post_id UNIQUE) prevents duplicate Outline writes on retry, and the row captures the error.
+  // Insert early as 'failed': the UNIQUE(mm_post_id) guard prevents duplicate Outline writes on retry.
   const saveRow = insertSaveStmt.run(
     channelId,
     triggeringPost.id,
@@ -154,7 +153,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<{ documentUrl: st
     throw err;
   }
 
-  updateSaveSuccessStmt.run(saveId);
+  updateSaveSuccessStmt.run(existingTopic.id, saveId);
 
   const documentUrl = `${config.OUTLINE_URL}/doc/${documentUrlId ?? documentId}`;
   return { documentUrl, topicDisplayName: existingTopic.topic_display_name };

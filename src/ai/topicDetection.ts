@@ -70,7 +70,6 @@ function buildUserPrompt(input: TopicDetectionInput): string {
   return lines.join("\n");
 }
 
-// Title-case a kebab-case slug (e.g. "client-onboarding" -> "Client Onboarding") for display fallback.
 export function toDisplayName(slug: string): string {
   return slug
     .split("-")
@@ -80,7 +79,23 @@ export function toDisplayName(slug: string): string {
 }
 
 function stripJsonFences(text: string): string {
-  return text.trim().replace(/^```json\s*|\s*```$/g, "").trim();
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenceMatch) return fenceMatch[1] ?? text.trim();
+
+  // No fence — locate the first '{' and find its matching '}' via balanced-brace scan.
+  const start = text.indexOf("{");
+  if (start !== -1) {
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}") {
+        depth--;
+        if (depth === 0) return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return text.trim();
 }
 
 function tryParse(text: string): TopicDetection | { error: string } {
@@ -98,7 +113,6 @@ function tryParse(text: string): TopicDetection | { error: string } {
 }
 
 export async function detectTopic(input: TopicDetectionInput): Promise<TopicDetection> {
-  // Explicit hashtag is authoritative — skip the model call entirely.
   if (input.explicitHashtag) {
     const slug = input.explicitHashtag;
     const matching = input.existingTopics.find((t) => t.slug === slug);

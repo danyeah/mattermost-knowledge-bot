@@ -23,6 +23,6 @@ export function parseCommand(textAfterMention: string): ParsedCommand {
     subcommand = "save";
   }
 
-  const explicitHashtag = extractFirstHashtag(trimmed);
+  const explicitHashtag = subcommand === "save" ? extractFirstHashtag(trimmed) : null;
   return { subcommand, explicitHashtag, raw: textAfterMention };
 }

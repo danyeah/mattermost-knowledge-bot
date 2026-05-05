@@ -5,7 +5,7 @@ import type { Config } from "../../config.js";
 import type { Logger } from "../../logger.js";
 import { parseMention, sortThreadPosts, extractFirstHashtag } from "../helpers.js";
 import { findChannelByMmId } from "../../db/repositories/channels.js";
-import { listTopicsByChannel } from "../../db/repositories/topics.js";
+import { listTopicsByChannel, findTopicByChannelAndSlug } from "../../db/repositories/topics.js";
 import {
   findActivePendingByThreadRoot,
   deletePendingById,
@@ -19,6 +19,7 @@ import {
   requestConfirmation,
   resumeFromConfirmation,
 } from "../../core/confirmationFlow.js";
+import { formatUserError } from "../../utils/errorMessage.js";
 
 interface PostedCtx {
   client: MattermostClient;
@@ -52,7 +53,7 @@ async function handleHashtagOverrideForPending(
   const pending = findActivePendingByThreadRoot(post.root_id);
   if (!pending) return false;
 
-  // Avoid resuming twice if the user happened to react before replying.
+  // Same-user guard: only the original requester may override their own pending confirmation.
   if (pending.triggered_by_user_id !== post.user_id) {
     ctx.logger.debug(
       { pending_id: pending.id, replied_by: post.user_id, original: pending.triggered_by_user_id },
@@ -67,10 +68,13 @@ async function handleHashtagOverrideForPending(
   );
 
   await withChannelLock(post.channel_id, async () => {
+    const existingTopic = findTopicByChannelAndSlug(post.channel_id, hashtag);
+    const displayName = existingTopic?.topic_display_name ?? toDisplayName(hashtag);
+
     await resumeFromConfirmation({
       pending,
       newTopicSlugOverride: hashtag,
-      newTopicDisplayNameOverride: toDisplayName(hashtag),
+      newTopicDisplayNameOverride: displayName,
       ctx: { mmClient: ctx.client, outlineClient: ctx.outlineClient, logger: ctx.logger },
     });
   });
@@ -92,8 +96,6 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
   if (post.user_id === botUserId) return;
   if (!post.root_id) return;
 
-  // Path B (confirmation flow): user replies in the thread with `#topic-name` to override the proposed topic.
-  // This must be checked before mention parsing because the override reply doesn't necessarily mention the bot.
   try {
     const handled = await handleHashtagOverrideForPending(post, ctx);
     if (handled) return;
@@ -124,7 +126,6 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
 
   if (!mentioned && !mentionedViaProps) return;
 
-  // Use the parsed afterMention; fall back to the raw message when the mention came in via props.
   const commandText = mentioned ? afterMention : post.message;
 
   logger.info(
@@ -152,7 +153,6 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
   const command = parseCommand(commandText);
 
   if (command.subcommand === "help") {
-    const collectionUrl = `${config.OUTLINE_URL}/collection/${channelRow.outline_collection_id}`;
     await client.createPost({
       channel_id: post.channel_id,
       root_id: post.root_id,
@@ -162,7 +162,7 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
 • \`@${config.MM_BOT_USERNAME} status\` — show this channel's wiki info
 • \`@${config.MM_BOT_USERNAME} help\` — show this message
 
-Documents are stored in Outline: ${collectionUrl}`,
+Documents are stored in Outline: ${config.OUTLINE_URL}`,
     });
     return;
   }
@@ -205,7 +205,7 @@ ${lastLine}`,
     logger.info({ thread_id: post.root_id, post_count: thread.length }, "thread_fetched");
   } catch (err) {
     logger.error({ err, root_id: post.root_id }, "thread_fetch_failed");
-    const shortError = (String(err instanceof Error ? err.message : err).split("\n")[0] ?? "").slice(0, 200);
+    const shortError = formatUserError(err);
     await client.createPost({
       channel_id: post.channel_id,
       root_id: post.root_id,
@@ -278,7 +278,6 @@ ${lastLine}`,
         ctx: { mmClient: client, outlineClient, logger },
       });
 
-      // If a confirmation existed for this thread, drop it now that the user resolved it explicitly.
       const lingering = findActivePendingByThreadRoot(post.root_id);
       if (lingering) deletePendingById(lingering.id);
 
@@ -290,7 +289,7 @@ ${lastLine}`,
       logger.info({ channel_id: post.channel_id, root_id: post.root_id, document_url: documentUrl }, "save_completed");
     } catch (err) {
       logger.error({ err }, "save_failed");
-      const shortError = (String(err instanceof Error ? err.message : err).split("\n")[0] ?? "").slice(0, 200);
+      const shortError = formatUserError(err);
       await client.createPost({
         channel_id: post.channel_id,
         root_id: post.root_id,

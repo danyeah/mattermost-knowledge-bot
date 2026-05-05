@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Post, MattermostClient } from "../mattermost/client.js";
 import type { OutlineClient } from "../outline/client.js";
 import type { Logger } from "../logger.js";
@@ -8,8 +9,10 @@ import {
   deletePendingById,
   type PendingConfirmationRow,
 } from "../db/repositories/pendingConfirmations.js";
+import { findTopicByChannelAndSlug } from "../db/repositories/topics.js";
 import { executeSave } from "./saveFlow.js";
 import { toDisplayName } from "../ai/topicDetection.js";
+import { formatUserError } from "../utils/errorMessage.js";
 
 interface ConfirmationCtx {
   mmClient: MattermostClient;
@@ -26,6 +29,22 @@ export interface ConfirmationPayload {
   teamName: string;
   rawCommand: string;
 }
+
+const ConfirmationPayloadSchema = z.object({
+  triggeringPost: z.object({
+    id: z.string(),
+    channel_id: z.string(),
+    root_id: z.string(),
+    user_id: z.string(),
+    message: z.string(),
+  }).passthrough(),
+  triggeringUsername: z.string(),
+  thread: z.array(z.unknown()),
+  threadUsernamesObj: z.record(z.string()),
+  channelId: z.string(),
+  teamName: z.string(),
+  rawCommand: z.string(),
+});
 
 interface RequestConfirmationOpts {
   detection: TopicDetection;
@@ -93,18 +112,28 @@ export async function requestConfirmation(
 
   const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
 
-  const row = insertPendingConfirmation({
-    mm_channel_id: channelId,
-    mm_thread_root_id: triggeringPost.root_id || triggeringPost.id,
-    mm_trigger_post_id: triggeringPost.id,
-    bot_reply_post_id: reply.id,
-    triggered_by_user_id: triggeringPost.user_id,
-    proposed_topic_slug: detection.topic_slug,
-    proposed_topic_name: detection.topic_display_name,
-    alternative_topics: JSON.stringify(detection.alternatives),
-    payload_json: JSON.stringify(payload),
-    expires_at: expiresAt,
-  });
+  let row: { id: number };
+  try {
+    row = insertPendingConfirmation({
+      mm_channel_id: channelId,
+      mm_thread_root_id: triggeringPost.root_id || triggeringPost.id,
+      mm_trigger_post_id: triggeringPost.id,
+      bot_reply_post_id: reply.id,
+      triggered_by_user_id: triggeringPost.user_id,
+      proposed_topic_slug: detection.topic_slug,
+      proposed_topic_name: detection.topic_display_name,
+      alternative_topics: JSON.stringify(detection.alternatives),
+      payload_json: JSON.stringify(payload),
+      expires_at: expiresAt,
+    });
+  } catch (insertErr) {
+    try {
+      await ctx.mmClient.deletePost(reply.id);
+    } catch (delErr) {
+      ctx.logger.error({ err: delErr, post_id: reply.id }, "confirmation_orphan_reply_delete_failed");
+    }
+    throw insertErr;
+  }
 
   ctx.logger.info(
     {
@@ -133,17 +162,24 @@ export async function resumeFromConfirmation(opts: ResumeOpts): Promise<void> {
 
   let payload: ConfirmationPayload;
   try {
-    payload = JSON.parse(pending.payload_json) as ConfirmationPayload;
+    payload = ConfirmationPayloadSchema.parse(JSON.parse(pending.payload_json)) as unknown as ConfirmationPayload;
   } catch (err) {
-    logger.error({ err, pending_id: pending.id }, "confirmation_payload_invalid_json");
+    logger.error({ err, pending_id: pending.id, payload_json: pending.payload_json }, "confirmation_payload_invalid");
     deletePendingById(pending.id);
     throw err;
   }
 
   const topicSlug = newTopicSlugOverride ?? pending.proposed_topic_slug;
-  const topicDisplayName =
-    newTopicDisplayNameOverride ??
-    (newTopicSlugOverride ? toDisplayName(newTopicSlugOverride) : pending.proposed_topic_name);
+
+  let topicDisplayName: string;
+  if (newTopicDisplayNameOverride) {
+    topicDisplayName = newTopicDisplayNameOverride;
+  } else if (newTopicSlugOverride) {
+    const existing = findTopicByChannelAndSlug(payload.channelId, newTopicSlugOverride);
+    topicDisplayName = existing?.topic_display_name ?? toDisplayName(newTopicSlugOverride);
+  } else {
+    topicDisplayName = pending.proposed_topic_name;
+  }
 
   const threadUsernames = new Map(Object.entries(payload.threadUsernamesObj));
 
@@ -151,7 +187,7 @@ export async function resumeFromConfirmation(opts: ResumeOpts): Promise<void> {
     const { documentUrl, topicDisplayName: finalDisplayName } = await executeSave({
       triggeringPost: payload.triggeringPost,
       triggeringUsername: payload.triggeringUsername,
-      thread: payload.thread,
+      thread: payload.thread as Post[],
       threadUsernames,
       channelId: payload.channelId,
       teamName: payload.teamName,
@@ -179,7 +215,7 @@ export async function resumeFromConfirmation(opts: ResumeOpts): Promise<void> {
     );
   } catch (err) {
     logger.error({ err, pending_id: pending.id }, "confirmation_resume_failed");
-    const shortError = (String(err instanceof Error ? err.message : err).split("\n")[0] ?? "").slice(0, 200);
+    const shortError = formatUserError(err);
     try {
       await mmClient.createPost({
         channel_id: payload.channelId,
@@ -189,8 +225,8 @@ export async function resumeFromConfirmation(opts: ResumeOpts): Promise<void> {
     } catch (replyErr) {
       logger.error({ err: replyErr }, "confirmation_resume_reply_failed");
     }
-    // Drop the pending row regardless: the saves table's UNIQUE(mm_post_id) already blocks any retry,
-    // so retaining the pending row would only let TTL cleanup nag and never resolve.
+    // The saves UNIQUE(mm_post_id) guard blocks any retry, so retaining the row would only let
+    // TTL cleanup nag without ever resolving.
     deletePendingById(pending.id);
     throw err;
   }

@@ -121,4 +121,8 @@ export class MattermostClient {
     this.logger.debug({ channel_id: params.channel_id, root_id: params.root_id }, "create_post");
     return this.request<Post>("POST", "/posts", params);
   }
+
+  async deletePost(postId: string): Promise<void> {
+    await this.request<void>("DELETE", `/posts/${postId}`);
+  }
 }

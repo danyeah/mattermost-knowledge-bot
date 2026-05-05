@@ -24,6 +24,7 @@ const ConfigSchema = z.object({
     ),
   CONFIRMATION_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.85),
   CONFIRMATION_TTL_MINUTES: z.coerce.number().int().positive().default(10),
+  CLEANUP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(5),
 
   DB_PATH: z.string().default("./data/kb-bot.db"),
 

@@ -20,6 +20,7 @@ export function startConfirmationCleanup(
     }
   }
 
+  tick();
   const handle = setInterval(tick, intervalMs);
 
   logger.info({ interval_minutes: intervalMinutes }, "confirmation_cleanup_started");

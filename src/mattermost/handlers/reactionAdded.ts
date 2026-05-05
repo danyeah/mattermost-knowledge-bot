@@ -29,7 +29,19 @@ export async function handleReactionAdded(event: ReactionAddedEvent, ctx: Reacti
 
   let reaction: Reaction;
   try {
-    reaction = JSON.parse(event.data.reaction) as Reaction;
+    const raw = event.data.reaction;
+    const parsed: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      !("post_id" in parsed) ||
+      !("user_id" in parsed) ||
+      !("emoji_name" in parsed)
+    ) {
+      logger.debug({ raw }, "reaction_added_missing_fields");
+      return;
+    }
+    reaction = parsed as Reaction;
   } catch {
     logger.warn({ raw: event.data.reaction }, "reaction_added_invalid_json");
     return;

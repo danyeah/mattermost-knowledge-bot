@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     dispatch,
   });
 
-  const cleanupJob = startConfirmationCleanup(5, logger);
+  const cleanupJob = startConfirmationCleanup(config.CLEANUP_INTERVAL_MINUTES, logger);
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "shutdown");
