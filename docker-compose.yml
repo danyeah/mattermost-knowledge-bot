@@ -5,7 +5,8 @@ services:
     image: mattermost-knowledge-bot:latest
     container_name: kb-bot
     restart: unless-stopped
-    network_mode: host
+    networks:
+      - pm-network
     env_file: ./.env
     volumes:
       - ./data:/app/data
@@ -19,3 +20,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
+
+networks:
+  pm-network:
+    external: true
+    name: pm-network
