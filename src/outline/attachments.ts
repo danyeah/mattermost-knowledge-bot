@@ -24,15 +24,26 @@ interface AttachmentCreateResponse {
 
 export async function uploadAttachment(
   client: OutlineClient,
-  opts: { buffer: Buffer; filename: string; mimeType: string; size: number },
+  opts: { 
+    buffer: Buffer; 
+    filename: string; 
+    mimeType: string; 
+    size: number;
+    documentId?: string; 
+  },
 ): Promise<OutlineAttachment> {
-  const { buffer, filename, mimeType, size } = opts;
+  const { buffer, filename, mimeType, size, documentId } = opts;
 
-  const raw = await client.post<AttachmentCreateResponse>("/attachments.create", {
+  const payload: any = {
     name: filename,
     contentType: mimeType,
     size,
-  });
+  };
+  if (documentId) {
+    payload.documentId = documentId;
+  }
+
+  const raw = await client.post<AttachmentCreateResponse>("/attachments.create", payload);
 
   if (!raw.uploadUrl || !raw.form || !raw.attachment?.id) {
     throw new Error(`Unexpected attachments.create response: ${JSON.stringify(raw)}`);

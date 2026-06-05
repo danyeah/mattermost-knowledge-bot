@@ -14,9 +14,10 @@ export interface AttachmentMapping {
 
 export async function processThreadAttachments(opts: {
   thread: Array<{ id: string; file_ids?: string[] }>;
+  documentId?: string;
   ctx: { mmClient: MattermostClient; outlineClient: OutlineClient; logger: Logger };
 }): Promise<Map<string, AttachmentMapping>> {
-  const { thread, ctx } = opts;
+  const { thread, documentId, ctx } = opts;
   const { mmClient, outlineClient, logger } = ctx;
 
   const uniqueFileIds = new Set<string>();
@@ -36,6 +37,7 @@ export async function processThreadAttachments(opts: {
         filename: download.name,
         mimeType: download.mimeType,
         size: download.size,
+        documentId, // <-- attach to the specific document if provided
       });
 
       const isImage = download.mimeType.startsWith("image/");
