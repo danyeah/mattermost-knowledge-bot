@@ -59,7 +59,12 @@ export async function summarizeFile(text: string, filename: string): Promise<str
   const trimmed = text.trim();
   if (trimmed.length < MIN_TEXT_CHARS) return null;
 
-  const userPrompt = `Riassumi in italiano il seguente documento (nome file: ${filename}).
+  // `/no_think` is Qwen 3.x's signal to skip the <think>...</think> reasoning
+  // phase. A file summary doesn't need chain-of-thought and skipping it
+  // halves latency and frees up the token budget for the actual answer.
+  const userPrompt = `/no_think
+
+Riassumi in italiano il seguente documento (nome file: ${filename}).
 
 Rispondi con:
 - Una frase di sintesi (max 25 parole)

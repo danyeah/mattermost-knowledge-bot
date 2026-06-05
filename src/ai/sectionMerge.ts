@@ -143,7 +143,7 @@ export async function mergeSections(input: SectionMergeInput): Promise<SectionMe
   const first = await callModel({
     systemPrompt: SECTION_MERGE_SYSTEM_PROMPT,
     userPrompt,
-    maxTokens: 4000,
+    maxTokens: 8000,
     temperature: 0.3,
   });
 
@@ -173,7 +173,7 @@ Your previous response was not valid JSON or did not match the required schema. 
   const second = await callModel({
     systemPrompt: SECTION_MERGE_SYSTEM_PROMPT,
     userPrompt: retryPrompt,
-    maxTokens: 4000,
+    maxTokens: 8000,
     temperature: 0.3,
   });
 

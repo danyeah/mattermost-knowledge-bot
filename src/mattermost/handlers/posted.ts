@@ -251,6 +251,17 @@ ${lastLine}`,
     return;
   }
 
+  // Immediate acknowledgement — the full save flow can take many seconds
+  // (LLM merge, doc upload, indexing). Reply right away so the user knows
+  // the request was received.
+  client
+    .createPost({
+      channel_id: post.channel_id,
+      root_id: post.root_id,
+      message: "🔄 Carico il thread su Outline...",
+    })
+    .catch((err) => logger.warn({ err }, "ack_post_failed"));
+
   let thread: Post[];
   let userMap: Map<string, string>;
   let triggeringUsername: string;
