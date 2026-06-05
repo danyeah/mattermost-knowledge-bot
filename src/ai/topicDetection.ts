@@ -46,9 +46,6 @@ Rules:
 
 function buildUserPrompt(input: TopicDetectionInput): string {
   const lines: string[] = [];
-  // `/no_think` first — see Decide line below for rationale.
-  lines.push("/no_think");
-  lines.push("");
   lines.push(`PROJECT (Mattermost channel): ${input.channelName}`);
   lines.push("");
   lines.push(`USER COMMAND: ${input.rawCommand}`);
@@ -71,6 +68,9 @@ function buildUserPrompt(input: TopicDetectionInput): string {
   }
   lines.push("");
   lines.push("Decide the topic for this thread.");
+  // `/no_think` at the very end is the most reliable trigger for Qwen 3.x
+  // (some llama.cpp builds only match it as the final token of the user msg).
+  lines.push("/no_think");
   return lines.join("\n");
 }
 
@@ -115,7 +115,7 @@ export async function detectTopic(input: TopicDetectionInput): Promise<TopicDete
   const first = await callModel({
     systemPrompt: TOPIC_DETECTION_SYSTEM_PROMPT,
     userPrompt,
-    maxTokens: 800,
+    maxTokens: 4000,
     temperature: 0.2,
   });
 
@@ -143,7 +143,7 @@ Your previous response was not valid JSON or did not match the required schema. 
   const second = await callModel({
     systemPrompt: TOPIC_DETECTION_SYSTEM_PROMPT,
     userPrompt: retryPrompt,
-    maxTokens: 800,
+    maxTokens: 4000,
     temperature: 0.2,
   });
 
