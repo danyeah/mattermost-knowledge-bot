@@ -13,7 +13,7 @@ const upsertStateStmt = db.prepare(
 );
 const deleteChunksStmt = db.prepare("DELETE FROM document_chunks WHERE doc_id = ?");
 const insertChunkStmt = db.prepare(
-  "INSERT INTO document_chunks (doc_id, doc_title, doc_url, chunk_index, heading, content, embedding) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  "INSERT INTO document_chunks (doc_id, doc_title, doc_url, collection_id, chunk_index, heading, content, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 );
 
 const EMBED_BATCH = 8;
@@ -24,7 +24,8 @@ export async function indexDocument(
   docTitle: string,
   docText: string,
   docRevision: number,
-  docUrl: string
+  docUrl: string,
+  collectionId = ""
 ): Promise<void> {
   const state = getStateStmt.get(docId);
   if (state && state.doc_revision === docRevision) return; // already up to date
@@ -51,6 +52,7 @@ export async function indexDocument(
         docId,
         docTitle,
         docUrl,
+        collectionId,
         c.chunkIndex,
         c.heading,
         c.content,
@@ -72,7 +74,7 @@ export async function runFullSync(client: OutlineClient): Promise<void> {
   for await (const doc of listAllDocuments(client)) {
     try {
       const before = indexed;
-      await indexDocument(client, doc.id, doc.title, doc.text ?? "", doc.revision ?? 0, doc.url ?? "");
+      await indexDocument(client, doc.id, doc.title, doc.text ?? "", doc.revision ?? 0, doc.url ?? "", doc.collectionId ?? "");
       if (indexed === before) skipped++; else indexed++;
     } catch (err) {
       logger.warn({ err, docId: doc.id, docTitle: doc.title }, "index_doc_failed");

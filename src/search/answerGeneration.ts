@@ -6,12 +6,13 @@ export interface SearchAnswer {
   sources: Array<{ docId: string; title: string; url: string; heading: string }>;
 }
 
-export async function generateAnswer(query: string, chunks: RetrievedChunk[]): Promise<SearchAnswer> {
+export async function generateAnswer(query: string, chunks: RetrievedChunk[], scopeLabel?: string): Promise<SearchAnswer> {
   const context = chunks
     .map((c, i) => `[${i + 1}] **${c.docTitle} › ${c.heading}**\n${c.content}`)
     .join("\n\n---\n\n");
 
-  const systemPrompt = `Sei un assistente aziendale. Rispondi alle domande degli utenti usando SOLO le informazioni fornite nel contesto.
+  const scopeNote = scopeLabel ? ` Priorità ai contenuti di ${scopeLabel}, ma puoi usare anche il contesto più ampio se necessario.` : "";
+  const systemPrompt = `Sei un assistente aziendale. Rispondi alle domande degli utenti usando SOLO le informazioni fornite nel contesto.${scopeNote}
 Se il contesto non contiene informazioni sufficienti, dillo chiaramente.
 Rispondi in italiano. Sii conciso (max 3-4 paragrafi). Cita le fonti con [numero].`;
 

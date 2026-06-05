@@ -1,8 +1,29 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "../config.js";
-import { search } from "../search/retrieval.js";
+import { search, type SearchScope } from "../search/retrieval.js";
 import { generateAnswer } from "../search/answerGeneration.js";
 import type { Logger } from "pino";
+
+function scopeFromPageUrl(pageUrl: string | undefined): SearchScope | undefined {
+  if (!pageUrl) return undefined;
+  try {
+    const { pathname } = new URL(pageUrl);
+    // /doc/<slug> → doc-level search
+    if (pathname.startsWith("/doc/")) return { docPath: pathname };
+    // /collection/<slug>-<uuid> → collection-level search
+    // Outline collection IDs are UUIDs at the end after last dash
+    if (pathname.startsWith("/collection/")) {
+      const slug = pathname.replace("/collection/", "");
+      const parts = slug.split("-");
+      if (parts.length >= 5) {
+        // UUID is last 5 dash-separated segments
+        const collectionId = parts.slice(-5).join("-");
+        return { collectionId };
+      }
+    }
+  } catch { /* invalid URL, fall through to full search */ }
+  return undefined;
+}
 
 const SCORE_THRESHOLD = 0.3;
 
@@ -121,6 +142,13 @@ function widgetJs(): string {
   const messages = document.getElementById('kb-messages');
   const input = document.getElementById('kb-input');
   const send = document.getElementById('kb-send');
+  const headerSpan = document.querySelector('#kb-header span');
+
+  // Show scope hint in header
+  const path = window.location.pathname;
+  if (path.startsWith('/doc/')) headerSpan.textContent = '🔍 Cerca in questo documento';
+  else if (path.startsWith('/collection/')) headerSpan.textContent = '🔍 Cerca in questa collezione';
+  else headerSpan.textContent = '🔍 Cerca nella wiki';
 
   btn.addEventListener('click', () => {
     panel.classList.toggle('hidden');
@@ -156,7 +184,7 @@ function widgetJs(): string {
       const res = await fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q })
+        body: JSON.stringify({ query: q, pageUrl: window.location.href })
       });
       const data = await res.json();
       thinking.remove();
@@ -195,7 +223,7 @@ export function startApiServer(log: Logger): void {
     if (url === "/kb/search" && req.method === "POST") {
       try {
         const body = await readBody(req);
-        const parsed = JSON.parse(body) as { query?: string };
+        const parsed = JSON.parse(body) as { query?: string; pageUrl?: string };
         const query = parsed.query?.trim();
 
         if (!query) {
@@ -203,7 +231,14 @@ export function startApiServer(log: Logger): void {
           return;
         }
 
-        const chunks = await search(query, 5);
+        const scope = scopeFromPageUrl(parsed.pageUrl);
+        let chunks = await search(query, 5, scope);
+
+        // If scoped search returns nothing, fall back to full wiki search
+        if (scope && (chunks.length === 0 || chunks[0]!.score < SCORE_THRESHOLD)) {
+          chunks = await search(query, 5);
+        }
+
         if (!chunks.length || chunks[0]!.score < SCORE_THRESHOLD) {
           json(res, 200, {
             answer: "Non ho trovato documenti rilevanti per questa domanda.",
@@ -212,7 +247,8 @@ export function startApiServer(log: Logger): void {
           return;
         }
 
-        const result = await generateAnswer(query, chunks);
+        const scopeLabel = scope?.docPath ? "questo documento" : scope?.collectionId ? "questa collezione" : null;
+        const result = await generateAnswer(query, chunks, scopeLabel ?? undefined);
         json(res, 200, result);
       } catch (err) {
         log.error({ err }, "api_search_error");
