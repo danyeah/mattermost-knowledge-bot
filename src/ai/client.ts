@@ -6,6 +6,24 @@ export interface CallModelResult {
   usage: { input: number; output: number };
 }
 
+/**
+ * Strip <think>…</think> blocks from reasoning-model output (Qwen 3.x, DeepSeek-R1,
+ * etc.). The chain-of-thought is interesting but never the final answer; if it
+ * leaks into our `text` field the rendered Outline page gets garbage.
+ *
+ * Takes everything after the last </think>. If the response is `<think>…` with
+ * no closing tag (CoT truncated by max_tokens), returns "" so the retry path
+ * can re-ask.
+ */
+function stripThinkTags(text: string): string {
+  const closeIdx = text.lastIndexOf("</think>");
+  if (closeIdx !== -1) {
+    return text.slice(closeIdx + "</think>".length).trim();
+  }
+  if (text.trimStart().startsWith("<think>")) return "";
+  return text;
+}
+
 async function callOpenAICompatible(opts: {
   systemPrompt: string;
   userPrompt: string;
@@ -43,7 +61,8 @@ async function callOpenAICompatible(opts: {
     };
   });
 
-  const text = data.choices[0]?.message?.content ?? "";
+  const rawText = data.choices[0]?.message?.content ?? "";
+  const text = stripThinkTags(rawText);
   return {
     text,
     usage: {

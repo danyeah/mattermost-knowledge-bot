@@ -212,12 +212,23 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
       belowSeparator = "";
     }
 
+    // Collect extracted text from attachments so the merge AI can populate
+    // Summary/Decisions/Technical sections from the actual document content
+    // rather than just the chat messages around it.
+    const attachedDocuments: Array<{ filename: string; text: string }> = [];
+    for (const mapping of attachmentMap.values()) {
+      if (mapping.extractedText && mapping.extractedText.trim().length > 0) {
+        attachedDocuments.push({ filename: mapping.filename, text: mapping.extractedText });
+      }
+    }
+
     // The chronological log is intentionally NOT passed to the AI — only curated sections + new thread.
     const merge = await mergeSections({
       todayIso,
       topicDisplayName: existingTopic?.topic_display_name ?? topicDisplayName,
       existingSections: priorSections,
       threadMessages,
+      ...(attachedDocuments.length > 0 && { attachedDocuments }),
     });
     changeSummary = merge.change_summary;
     if (merge.summary !== null && merge.summary.trim().length > 0) mergedSummaryForTopic = merge.summary;

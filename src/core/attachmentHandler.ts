@@ -13,6 +13,9 @@ export interface AttachmentMapping {
   isImage: boolean;
   /** LLM-generated summary if the file content could be extracted. */
   summary?: string;
+  /** Raw extracted text — fed to the section-merge AI so it can populate
+   * Summary/Decisions/Technical from the document content. */
+  extractedText?: string;
 }
 
 export async function processThreadAttachments(opts: {
@@ -50,6 +53,7 @@ export async function processThreadAttachments(opts: {
         : attachment.url;
 
       let summary: string | undefined;
+      let extractedText: string | undefined;
       if (!isImage) {
         try {
           const extracted = await extractTextFromFile(
@@ -63,6 +67,9 @@ export async function processThreadAttachments(opts: {
               "attachment_text_extraction_skipped",
             );
           } else {
+            if (extracted.text.trim().length > 0) {
+              extractedText = extracted.text;
+            }
             const s = await summarizeFile(extracted.text, download.name);
             if (s) summary = s;
           }
@@ -78,6 +85,7 @@ export async function processThreadAttachments(opts: {
         mimeType: download.mimeType,
         isImage,
         ...(summary !== undefined && { summary }),
+        ...(extractedText !== undefined && { extractedText }),
       };
       result.set(fileId, mapping);
     } catch (err) {

@@ -9,7 +9,13 @@ export interface SectionMergeInput {
   topicDisplayName: string;
   existingSections: DocumentSections;
   threadMessages: Array<{ timestamp: string; username: string; message: string }>;
+  /** Text of files attached to the thread (PDF/DOCX/MD already extracted).
+   * Treated as authoritative source material — much richer than chat text. */
+  attachedDocuments?: Array<{ filename: string; text: string }>;
 }
+
+const MAX_DOC_CHARS = 8000;       // per-document cap to keep prompt size bounded
+const MAX_TOTAL_DOC_CHARS = 20000; // hard cap across all docs in one merge
 
 const SECTION_MERGE_SYSTEM_PROMPT = `You are a technical writer maintaining a structured knowledge base for a
 software team. You receive an existing document's curated sections and a new
@@ -45,6 +51,11 @@ Rules:
   the new addition.
 - If the new thread doesn't add meaningful new info to a section, leave that
   section null.
+- ATTACHED DOCUMENTS, when present, are authoritative source material that
+  should dominate section content. Extract Summary, Decisions, Technical
+  details, Operational notes and References from those documents — do not
+  treat them as mere file links. Chat messages provide context around the
+  documents.
 - "change_summary" is a single sentence describing the net change, used in
   Mattermost reply and audit logs.
 - Every section value MUST be a single JSON string containing markdown, OR null.
@@ -88,6 +99,26 @@ function buildUserPrompt(input: SectionMergeInput): string {
     lines.push(`[${m.timestamp}] @${m.username}: ${m.message}`);
   }
   lines.push("");
+
+  if (input.attachedDocuments && input.attachedDocuments.length > 0) {
+    lines.push("ATTACHED DOCUMENTS (extracted text — authoritative for section content):");
+    let remainingBudget = MAX_TOTAL_DOC_CHARS;
+    for (const doc of input.attachedDocuments) {
+      if (remainingBudget <= 0) {
+        lines.push(`### ${doc.filename}`);
+        lines.push("[omitted: prompt size budget exhausted]");
+        lines.push("");
+        continue;
+      }
+      const cap = Math.min(MAX_DOC_CHARS, remainingBudget);
+      const text = doc.text.length > cap ? doc.text.slice(0, cap) + "\n…[truncated]" : doc.text;
+      lines.push(`### ${doc.filename}`);
+      lines.push(text);
+      lines.push("");
+      remainingBudget -= text.length;
+    }
+  }
+
   lines.push("Produce the updated sections.");
   return lines.join("\n");
 }
