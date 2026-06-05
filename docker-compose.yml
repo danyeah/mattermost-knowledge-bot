@@ -34,8 +34,10 @@ services:
       - pm-network
     volumes:
       - ollama_data:/root/.ollama
+    # The ollama image has no curl/wget; use the bundled `ollama` binary
+    # itself — `ollama list` is a cheap call against the local API.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 10
