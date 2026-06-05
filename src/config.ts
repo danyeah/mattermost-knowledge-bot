@@ -10,8 +10,12 @@ const ConfigSchema = z.object({
   OUTLINE_URL: z.string().url(),
   OUTLINE_API_TOKEN: z.string().min(20),
 
-  ANTHROPIC_API_KEY: z.string().min(20),
+  ANTHROPIC_API_KEY: z.string().default(""),
   ANTHROPIC_MODEL: z.string().default("claude-haiku-4-5-20251001"),
+
+  // When set, use this OpenAI-compatible endpoint instead of Anthropic
+  LLM_BASE_URL: z.string().url().optional().or(z.literal("")),
+  LLM_MODEL: z.string().default("Qwen3.6-27B-UD-Q4_K_XL.gguf"),
 
   OLLAMA_URL: z.string().url().default("http://ollama:11434"),
   INDEX_SYNC_INTERVAL_MINUTES: z.coerce.number().int().positive().default(60),
