@@ -119,7 +119,17 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
   const nowIso = new Date().toISOString();
   const todayIso = nowIso.slice(0, 10);
 
-  // Attachment processing moved after documentId resolution
+  // Resolve the existing topic early so we can know the Outline documentId
+  // upfront. Attachments uploaded for existing topics get associated with the
+  // right document; for new topics the documentId is created below and the
+  // attachments fall back to standalone uploads.
+  const existingTopic = findTopicByChannelAndSlug(channelId, topicSlug);
+  const attachmentMap = await processThreadAttachments({
+    thread,
+    ...(existingTopic ? { documentId: existingTopic.outline_document_id } : {}),
+    ctx: { mmClient, outlineClient, logger },
+  });
+
   const threadMessagesFull = thread.map((p) => {
     const attachments: MessageAttachment[] = (p.file_ids ?? []).map((fid) => {
       const mapping = attachmentMap.get(fid);
@@ -154,7 +164,6 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     message,
   }));
 
-  let existingTopic = findTopicByChannelAndSlug(channelId, topicSlug);
   let resolvedTopic!: TopicRow;
   let documentId: string;
   let documentUrlId: string | undefined;
@@ -239,13 +248,6 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     } else {
       resolvedTopic = existingTopic;
       documentId = resolvedTopic.outline_document_id;
-
-      // Process attachments with documentId so files are attached to this page
-      const attachmentMap = await processThreadAttachments({
-        thread,
-        documentId,
-        ctx: { mmClient, outlineClient, logger },
-      });
 
       const updatedMarkdown = buildDocument({
         topicDisplayName: resolvedTopic.topic_display_name,

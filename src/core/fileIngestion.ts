@@ -1,6 +1,7 @@
 import type { MattermostClient } from "../mattermost/client.js";
 import type { OutlineClient } from "../outline/client.js";
 import type { Logger } from "../logger.js";
+import { config } from "../config.js";
 import { createDocument } from "../outline/documents.js";
 import { uploadAttachment } from "../outline/attachments.js";
 import { callModel } from "../ai/client.js";
