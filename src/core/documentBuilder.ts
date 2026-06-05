@@ -11,6 +11,8 @@ export interface MessageAttachment {
   outlineUrl: string;
   isImage: boolean;
   unavailable?: boolean;
+  /** LLM-generated summary of the file contents, rendered inline if present. */
+  summary?: string;
 }
 
 export interface ChronologicalEntry {
@@ -47,6 +49,12 @@ function renderEntry(entry: ChronologicalEntry): string {
         lines.push(`> ![${att.filename}](${att.outlineUrl})`);
       } else {
         lines.push(`> [${att.filename}](${att.outlineUrl})`);
+      }
+      if (att.summary) {
+        // Indent each summary line so it stays inside the same blockquote.
+        for (const line of att.summary.split("\n")) {
+          lines.push(`> > ${line}`);
+        }
       }
     }
   }

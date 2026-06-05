@@ -167,6 +167,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
         filename: mapping.filename,
         outlineUrl: mapping.outlineUrl,
         isImage: mapping.isImage,
+        ...(mapping.summary !== undefined && { summary: mapping.summary }),
       };
     });
     return {

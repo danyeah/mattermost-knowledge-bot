@@ -3,6 +3,7 @@ import type { OutlineClient } from "../outline/client.js";
 import type { Logger } from "../logger.js";
 import { uploadAttachment } from "../outline/attachments.js";
 import { config } from "../config.js";
+import { extractTextFromFile, summarizeFile } from "./fileSummarizer.js";
 
 export interface AttachmentMapping {
   fileId: string;
@@ -10,6 +11,8 @@ export interface AttachmentMapping {
   filename: string;
   mimeType: string;
   isImage: boolean;
+  /** LLM-generated summary if the file content could be extracted. */
+  summary?: string;
 }
 
 export async function processThreadAttachments(opts: {
@@ -46,13 +49,37 @@ export async function processThreadAttachments(opts: {
         ? `${config.OUTLINE_URL.replace(/\/$/, "")}${attachment.url}`
         : attachment.url;
 
-      result.set(fileId, {
+      let summary: string | undefined;
+      if (!isImage) {
+        try {
+          const extracted = await extractTextFromFile(
+            download.buffer,
+            download.name,
+            download.mimeType,
+          );
+          if (extracted.skipReason) {
+            logger.info(
+              { fileId, filename: download.name, reason: extracted.skipReason },
+              "attachment_text_extraction_skipped",
+            );
+          } else {
+            const s = await summarizeFile(extracted.text, download.name);
+            if (s) summary = s;
+          }
+        } catch (err) {
+          logger.warn({ err, fileId, filename: download.name }, "attachment_summary_failed");
+        }
+      }
+
+      const mapping: AttachmentMapping = {
         fileId,
         outlineUrl,
         filename: download.name,
         mimeType: download.mimeType,
         isImage,
-      });
+        ...(summary !== undefined && { summary }),
+      };
+      result.set(fileId, mapping);
     } catch (err) {
       logger.warn({ err, fileId }, "attachment_process_failed");
     }
