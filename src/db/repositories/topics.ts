@@ -21,6 +21,9 @@ const touchTopicStmt = db.prepare("UPDATE topics SET last_updated_at = datetime(
 const updateTopicSummaryStmt = db.prepare(
   "UPDATE topics SET summary = ?, last_updated_at = datetime('now') WHERE id = ?",
 );
+const deleteTopicByIdStmt = db.prepare("DELETE FROM topics WHERE id = ?");
+const deleteChunksForDocStmt = db.prepare("DELETE FROM document_chunks WHERE doc_id = ?");
+const deleteIndexStateForDocStmt = db.prepare("DELETE FROM index_state WHERE doc_id = ?");
 
 export function findTopicByChannelAndSlug(mmChannelId: string, topicSlug: string): TopicRow | null {
   return (findTopicStmt.get(mmChannelId, topicSlug) as TopicRow | undefined) ?? null;
@@ -49,4 +52,18 @@ export function touchTopic(topicId: number): void {
 export function updateTopicSummary(topicId: number, summary: string | null): void {
   const result = updateTopicSummaryStmt.run(summary, topicId);
   if (result.changes === 0) throw new Error(`updateTopicSummary: topic ${topicId} not found`);
+}
+
+/**
+ * Prune a topic row whose Outline document no longer exists (deleted/archived
+ * in Outline UI). Also removes any orphan embedding chunks and index state for
+ * that document. saves.topic_id is set to NULL automatically by the FK.
+ */
+export function pruneTopicAndDocArtifacts(topicId: number, outlineDocumentId: string): void {
+  const tx = db.transaction(() => {
+    deleteChunksForDocStmt.run(outlineDocumentId);
+    deleteIndexStateForDocStmt.run(outlineDocumentId);
+    deleteTopicByIdStmt.run(topicId);
+  });
+  tx();
 }

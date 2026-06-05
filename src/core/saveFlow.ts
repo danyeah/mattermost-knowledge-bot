@@ -8,11 +8,13 @@ import { findChannelByMmId } from "../db/repositories/channels.js";
 import {
   findTopicByChannelAndSlug,
   insertTopic,
+  pruneTopicAndDocArtifacts,
   touchTopic,
   updateTopicSummary,
   type TopicRow,
 } from "../db/repositories/topics.js";
-import { createDocument, deleteDocument, getDocument, updateDocument } from "../outline/documents.js";
+import { createDocument, deleteDocument, getDocument, updateDocument, type OutlineDocument } from "../outline/documents.js";
+import { HttpError } from "../utils/retry.js";
 import { indexDocument } from "../indexer/outlineIndexer.js";
 import { buildDocument, parseExisting, type DocumentSections, type MessageAttachment } from "./documentBuilder.js";
 import type { SectionMerge } from "../ai/schemas.js";
@@ -120,11 +122,35 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
   const nowIso = new Date().toISOString();
   const todayIso = nowIso.slice(0, 10);
 
-  // Resolve the existing topic early so we can know the Outline documentId
-  // upfront. Attachments uploaded for existing topics get associated with the
-  // right document; for new topics the documentId is created below and the
-  // attachments fall back to standalone uploads.
-  const existingTopic = findTopicByChannelAndSlug(channelId, topicSlug);
+  // Resolve the existing topic early. We also validate the Outline document
+  // up front: if a human deleted/archived it in the Outline UI, the topic row
+  // is stale (every update would 403/404 in a loop). Prune it and treat the
+  // save as a fresh topic.
+  let existingTopic = findTopicByChannelAndSlug(channelId, topicSlug);
+  let existingDoc: OutlineDocument | null = null;
+  if (existingTopic) {
+    try {
+      const doc = await getDocument(outlineClient, existingTopic.outline_document_id);
+      const meta = doc as OutlineDocument & { deletedAt?: string | null; archivedAt?: string | null };
+      if (meta.deletedAt || meta.archivedAt) {
+        throw new HttpError(410, "", "outline document deleted or archived");
+      }
+      existingDoc = doc;
+    } catch (err) {
+      const status = err instanceof HttpError ? err.status : 0;
+      if (status === 404 || status === 403 || status === 410) {
+        logger.warn(
+          { topic_id: existingTopic.id, document_id: existingTopic.outline_document_id, status },
+          "stale_topic_pruned",
+        );
+        pruneTopicAndDocArtifacts(existingTopic.id, existingTopic.outline_document_id);
+        existingTopic = null;
+      } else {
+        throw err;
+      }
+    }
+  }
+
   const attachmentMap = await processThreadAttachments({
     thread,
     ...(existingTopic ? { documentId: existingTopic.outline_document_id } : {}),
@@ -175,10 +201,9 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     let priorSections: DocumentSections;
     let belowSeparator: string;
 
-    if (existingTopic) {
-      const existing = await getDocument(outlineClient, existingTopic.outline_document_id);
-      documentUrlId = existing.urlId;
-      const parsed = parseExisting(existing.text);
+    if (existingTopic && existingDoc) {
+      documentUrlId = existingDoc.urlId;
+      const parsed = parseExisting(existingDoc.text);
       priorSections = parsed.sections;
       belowSeparator = parsed.belowSeparator;
     } else {
