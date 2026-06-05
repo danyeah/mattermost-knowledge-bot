@@ -13,6 +13,7 @@ import {
   type TopicRow,
 } from "../db/repositories/topics.js";
 import { createDocument, deleteDocument, getDocument, updateDocument } from "../outline/documents.js";
+import { indexDocument } from "../indexer/outlineIndexer.js";
 import { buildDocument, parseExisting, type DocumentSections, type MessageAttachment } from "./documentBuilder.js";
 import type { SectionMerge } from "../ai/schemas.js";
 import { buildPermalink } from "../mattermost/helpers.js";
@@ -245,6 +246,22 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
         { document_id: documentId, channel_id: channelId, topic_slug: topicSlug },
         "outline_document_created",
       );
+
+      // Inline RAG indexing — make the new doc searchable immediately
+      // instead of waiting for the next scheduled sync. Failures degrade
+      // gracefully: the scheduled sync will retry within INDEX_SYNC_INTERVAL.
+      try {
+        await indexDocument(
+          outlineClient,
+          created.id,
+          topicDisplayName,
+          initialMarkdown,
+          created.revision ?? 0,
+          created.url ?? "",
+        );
+      } catch (err) {
+        logger.warn({ err, docId: created.id }, "inline_index_failed");
+      }
     } else {
       resolvedTopic = existingTopic;
       documentId = resolvedTopic.outline_document_id;
@@ -274,6 +291,20 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
         { document_id: documentId, channel_id: channelId, topic_slug: topicSlug },
         "outline_document_updated",
       );
+
+      // Inline RAG re-indexing — see new-topic branch above.
+      try {
+        await indexDocument(
+          outlineClient,
+          updated.id,
+          resolvedTopic.topic_display_name,
+          updatedMarkdown,
+          updated.revision ?? 0,
+          updated.url ?? "",
+        );
+      } catch (err) {
+        logger.warn({ err, docId: updated.id }, "inline_index_failed");
+      }
     }
   } catch (err) {
     updateSaveFailedStmt.run(err instanceof Error ? err.message : String(err), saveId);
