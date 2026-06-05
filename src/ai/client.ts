@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { retryWithBackoff } from "../utils/retry.js";
 
 export interface CallModelResult {
   text: string;
@@ -21,21 +22,26 @@ async function callOpenAICompatible(opts: {
     temperature: opts.temperature,
   };
 
-  const res = await fetch(`${config.LLM_BASE_URL}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+  // The self-hosted LLM occasionally drops the socket mid-generation
+  // ("fetch failed: other side closed"). Retry with backoff — it's a
+  // transient network/server condition rather than a real failure.
+  const data = await retryWithBackoff(async () => {
+    const res = await fetch(`${config.LLM_BASE_URL}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => "");
+      throw new Error(`LLM request failed: ${res.status} ${err}`);
+    }
+
+    return await res.json() as {
+      choices: Array<{ message: { content: string } }>;
+      usage?: { prompt_tokens: number; completion_tokens: number };
+    };
   });
-
-  if (!res.ok) {
-    const err = await res.text().catch(() => "");
-    throw new Error(`LLM request failed: ${res.status} ${err}`);
-  }
-
-  const data = await res.json() as {
-    choices: Array<{ message: { content: string } }>;
-    usage?: { prompt_tokens: number; completion_tokens: number };
-  };
 
   const text = data.choices[0]?.message?.content ?? "";
   return {
