@@ -15,7 +15,12 @@ export async function generateAnswer(query: string, chunks: RetrievedChunk[]): P
 Se il contesto non contiene informazioni sufficienti, dillo chiaramente.
 Rispondi in italiano. Sii conciso (max 3-4 paragrafi). Cita le fonti con [numero].`;
 
-  const userPrompt = `Domanda: ${query}
+  // `/no_think` tells Qwen 3.x to skip chain-of-thought — for a grounded Q&A
+  // we want the answer, not the reasoning trace (and a long <think> phase
+  // was eating the maxTokens budget, leaving the answer empty after strip).
+  const userPrompt = `/no_think
+
+Domanda: ${query}
 
 Contesto:
 ${context}`;
@@ -23,7 +28,7 @@ ${context}`;
   const { text } = await callModel({
     systemPrompt,
     userPrompt,
-    maxTokens: 1200,
+    maxTokens: 4000,
     temperature: 0.2,
   });
 

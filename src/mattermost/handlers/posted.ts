@@ -173,7 +173,7 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
     });
 
     try {
-      const chunks = await search(query, 5);
+      const chunks = await search(query, 5, post.channel_id);
       const topChunk = chunks[0];
       if (chunks.length === 0 || !topChunk || topChunk.score < 0.3) {
         await client.updatePost(thinkingPost.id, `❌ Nessun documento rilevante trovato per: _${query}_`);
