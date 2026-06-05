@@ -119,12 +119,7 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
   const nowIso = new Date().toISOString();
   const todayIso = nowIso.slice(0, 10);
 
-  // Process attachments before rendering; failures degrade gracefully (missing fileIds = unavailable).
-  const attachmentMap = await processThreadAttachments({
-    thread,
-    ctx: { mmClient, outlineClient, logger },
-  });
-
+  // Attachment processing moved after documentId resolution
   const threadMessagesFull = thread.map((p) => {
     const attachments: MessageAttachment[] = (p.file_ids ?? []).map((fid) => {
       const mapping = attachmentMap.get(fid);
@@ -244,6 +239,13 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     } else {
       resolvedTopic = existingTopic;
       documentId = resolvedTopic.outline_document_id;
+
+      // Process attachments with documentId so files are attached to this page
+      const attachmentMap = await processThreadAttachments({
+        thread,
+        documentId,
+        ctx: { mmClient, outlineClient, logger },
+      });
 
       const updatedMarkdown = buildDocument({
         topicDisplayName: resolvedTopic.topic_display_name,
