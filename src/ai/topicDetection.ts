@@ -46,6 +46,9 @@ Rules:
 
 function buildUserPrompt(input: TopicDetectionInput): string {
   const lines: string[] = [];
+  // `/no_think` first — see Decide line below for rationale.
+  lines.push("/no_think");
+  lines.push("");
   lines.push(`PROJECT (Mattermost channel): ${input.channelName}`);
   lines.push("");
   lines.push(`USER COMMAND: ${input.rawCommand}`);
