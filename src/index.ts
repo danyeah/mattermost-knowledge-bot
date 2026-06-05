@@ -8,6 +8,8 @@ import { handlePosted } from "./mattermost/handlers/posted.js";
 import { handleUserAdded } from "./mattermost/handlers/userAdded.js";
 import { handleReactionAdded } from "./mattermost/handlers/reactionAdded.js";
 import { startConfirmationCleanup } from "./jobs/confirmationCleanup.js";
+import { startIndexSync } from "./jobs/indexSync.js";
+import { ensureModelReady } from "./embedding/client.js";
 
 async function main(): Promise<void> {
   logger.info(
@@ -96,6 +98,14 @@ async function main(): Promise<void> {
   });
 
   const cleanupJob = startConfirmationCleanup(config.CLEANUP_INTERVAL_MINUTES, logger);
+
+  // Start embedding model check + Outline index sync
+  try {
+    await ensureModelReady();
+  } catch (err) {
+    logger.warn({ err }, "embedding_model_not_ready_search_disabled");
+  }
+  startIndexSync(outlineClient);
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "shutdown");

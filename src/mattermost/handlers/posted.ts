@@ -20,6 +20,8 @@ import {
   resumeFromConfirmation,
 } from "../../core/confirmationFlow.js";
 import { formatUserError } from "../../utils/errorMessage.js";
+import { search } from "../../search/retrieval.js";
+import { generateAnswer } from "../../search/answerGeneration.js";
 
 interface PostedCtx {
   client: MattermostClient;
@@ -153,17 +155,67 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
 
   const command = parseCommand(commandText);
 
+  if (command.subcommand === "search") {
+    const query = command.searchQuery;
+    if (!query) {
+      await client.createPost({
+        channel_id: post.channel_id,
+        root_id: post.root_id || post.id,
+        message: `Uso: \`@${config.MM_BOT_USERNAME} cerca domanda\` — cerca nella wiki aziendale.`,
+      });
+      return;
+    }
+
+    const thinkingPost = await client.createPost({
+      channel_id: post.channel_id,
+      root_id: post.root_id || post.id,
+      message: `🔍 Cerco nella wiki: _${query}_…`,
+    });
+
+    try {
+      const chunks = await search(query, 5);
+      const topChunk = chunks[0];
+      if (chunks.length === 0 || !topChunk || topChunk.score < 0.3) {
+        await client.updatePost(thinkingPost.id, `❌ Nessun documento rilevante trovato per: _${query}_`);
+        return;
+      }
+
+      const { answer, sources } = await generateAnswer(query, chunks);
+
+      const seen = new Set<string>();
+      const uniqueSources = sources.filter((s) => {
+        const key = s.url;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      const sourceLines = uniqueSources
+        .map((s, i) => `[${i + 1}] [${s.title}${s.heading !== s.title ? ` › ${s.heading}` : ""}](${s.url})`)
+        .join("\n");
+
+      const reply = `${answer}\n\n**Fonti:**\n${sourceLines}`;
+      await client.updatePost(thinkingPost.id, reply);
+
+      logger.info({ query, chunks: chunks.length, topScore: topChunk.score }, "search_answered");
+    } catch (err) {
+      logger.error({ err, query }, "search_failed");
+      await client.updatePost(thinkingPost.id, `⚠️ Errore durante la ricerca: ${formatUserError(err)}`);
+    }
+    return;
+  }
+
   if (command.subcommand === "help") {
     await client.createPost({
       channel_id: post.channel_id,
       root_id: post.root_id || post.id,
       message: `**Knowledge Bot commands:**
-• \`@${config.MM_BOT_USERNAME}\` (in a thread reply) — save the thread, auto-detect topic
-• \`@${config.MM_BOT_USERNAME} #topic-name\` — save with explicit topic
-• \`@${config.MM_BOT_USERNAME} status\` — show this channel's wiki info
-• \`@${config.MM_BOT_USERNAME} help\` — show this message
+• \`@${config.MM_BOT_USERNAME}\` (in a thread reply) — salva il thread, rileva topic automaticamente
+• \`@${config.MM_BOT_USERNAME} #topic-name\` — salva su un topic esplicito
+• \`@${config.MM_BOT_USERNAME} cerca domanda\` — cerca nella wiki aziendale con AI
+• \`@${config.MM_BOT_USERNAME} status\` — mostra le statistiche del canale
+• \`@${config.MM_BOT_USERNAME} help\` — mostra questo messaggio
 
-Documents are stored in Outline: ${config.OUTLINE_URL}`,
+Documenti: ${config.OUTLINE_URL}`,
     });
     return;
   }

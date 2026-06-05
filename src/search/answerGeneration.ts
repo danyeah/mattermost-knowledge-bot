@@ -1,0 +1,38 @@
+import { callModel } from "../ai/client.js";
+import type { RetrievedChunk } from "./retrieval.js";
+
+export interface SearchAnswer {
+  answer: string;
+  sources: Array<{ docId: string; title: string; url: string; heading: string }>;
+}
+
+export async function generateAnswer(query: string, chunks: RetrievedChunk[]): Promise<SearchAnswer> {
+  const context = chunks
+    .map((c, i) => `[${i + 1}] **${c.docTitle} › ${c.heading}**\n${c.content}`)
+    .join("\n\n---\n\n");
+
+  const systemPrompt = `Sei un assistente aziendale. Rispondi alle domande degli utenti usando SOLO le informazioni fornite nel contesto.
+Se il contesto non contiene informazioni sufficienti, dillo chiaramente.
+Rispondi in italiano. Sii conciso (max 3-4 paragrafi). Cita le fonti con [numero].`;
+
+  const userPrompt = `Domanda: ${query}
+
+Contesto:
+${context}`;
+
+  const { text } = await callModel({
+    systemPrompt,
+    userPrompt,
+    maxTokens: 1200,
+    temperature: 0.2,
+  });
+
+  const sources = chunks.map((c) => ({
+    docId: c.docId,
+    title: c.docTitle,
+    url: c.docUrl,
+    heading: c.heading,
+  }));
+
+  return { answer: text, sources };
+}

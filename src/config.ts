@@ -13,6 +13,9 @@ const ConfigSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(20),
   ANTHROPIC_MODEL: z.string().default("claude-haiku-4-5-20251001"),
 
+  OLLAMA_URL: z.string().url().default("http://ollama:11434"),
+  INDEX_SYNC_INTERVAL_MINUTES: z.coerce.number().int().positive().default(60),
+
   BOT_TRIGGER_MENTIONS: z
     .string()
     .default("wikibot,kb,knowledge-bot")

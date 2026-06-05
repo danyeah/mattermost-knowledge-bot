@@ -140,6 +140,10 @@ export class MattermostClient {
     return this.request<Post>("POST", "/posts", params);
   }
 
+  async updatePost(postId: string, message: string): Promise<Post> {
+    return this.request<Post>("PUT", `/posts/${postId}/patch`, { message });
+  }
+
   async deletePost(postId: string): Promise<void> {
     await this.request<void>("DELETE", `/posts/${postId}`);
   }

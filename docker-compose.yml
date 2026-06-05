@@ -8,8 +8,13 @@ services:
     networks:
       - pm-network
     env_file: ./.env
+    environment:
+      OLLAMA_URL: http://ollama:11434
     volumes:
       - ./data:/app/data
+    depends_on:
+      ollama:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -20,6 +25,29 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kb-ollama
+    restart: unless-stopped
+    networks:
+      - pm-network
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  ollama_data:
 
 networks:
   pm-network:
