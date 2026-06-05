@@ -10,6 +10,8 @@ services:
     env_file: ./.env
     environment:
       OLLAMA_URL: http://ollama:11434
+    ports:
+      - "3333:3333"
     volumes:
       - ./data:/app/data
     depends_on:

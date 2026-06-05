@@ -10,6 +10,7 @@ import { handleReactionAdded } from "./mattermost/handlers/reactionAdded.js";
 import { startConfirmationCleanup } from "./jobs/confirmationCleanup.js";
 import { startIndexSync } from "./jobs/indexSync.js";
 import { ensureModelReady } from "./embedding/client.js";
+import { startApiServer } from "./api/server.js";
 
 async function main(): Promise<void> {
   logger.info(
@@ -106,6 +107,7 @@ async function main(): Promise<void> {
     logger.warn({ err }, "embedding_model_not_ready_search_disabled");
   }
   startIndexSync(outlineClient);
+  startApiServer(logger);
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "shutdown");

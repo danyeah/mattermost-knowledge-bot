@@ -37,6 +37,9 @@ const ConfigSchema = z.object({
 
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   NODE_ENV: z.enum(["development", "production", "test"]).default("production"),
+
+  API_PORT: z.coerce.number().int().positive().default(3333),
+  API_CORS_ORIGIN: z.string().default("*"),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
