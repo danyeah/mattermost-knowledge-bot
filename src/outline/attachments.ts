@@ -51,9 +51,16 @@ export async function uploadAttachment(
 
   const { uploadUrl, form, attachment } = raw;
 
+  const outlineBase = config.OUTLINE_URL.replace(/\/$/, "");
   const resolvedUploadUrl = uploadUrl.startsWith("/")
-    ? `${config.OUTLINE_URL.replace(/\/$/, "")}${uploadUrl}`
+    ? `${outlineBase}${uploadUrl}`
     : uploadUrl;
+
+  // When Outline uses local file storage, the uploadUrl points back to Outline
+  // itself and requires the Bearer token. With S3/MinIO it's a presigned URL
+  // that rejects extra auth headers — detect by host match.
+  const usesOutlineUpload =
+    uploadUrl.startsWith("/") || resolvedUploadUrl.startsWith(outlineBase);
 
   const formData = new FormData();
   for (const [key, value] of Object.entries(form)) {
@@ -66,7 +73,9 @@ export async function uploadAttachment(
       const res = await fetch(resolvedUploadUrl, {
         method: "POST",
         body: formData,
-        // No Authorization header — presigned URLs reject extra auth headers
+        headers: usesOutlineUpload
+          ? { Authorization: `Bearer ${config.OUTLINE_API_TOKEN}` }
+          : undefined,
       });
       if (!res.ok) {
         const text = await res.text();
