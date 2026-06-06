@@ -1,5 +1,10 @@
 import { config } from "../config.js";
 import { retryWithBackoff } from "../utils/retry.js";
+import { Semaphore } from "../utils/semaphore.js";
+
+// One LLM call at a time — llama.cpp is single-slot by default and queuing
+// at this layer gives callers a clean "waiting in queue" signal.
+const llmSemaphore = new Semaphore(1);
 
 export interface CallModelResult {
   text: string;
@@ -109,8 +114,11 @@ export async function callModel(opts: {
   maxTokens: number;
   temperature: number;
 }): Promise<CallModelResult> {
-  if (config.LLM_BASE_URL) {
-    return callOpenAICompatible(opts);
-  }
-  return callAnthropic(opts);
+  return llmSemaphore.run(() =>
+    config.LLM_BASE_URL ? callOpenAICompatible(opts) : callAnthropic(opts)
+  );
+}
+
+export function llmQueueDepth(): { running: number; pending: number } {
+  return { running: llmSemaphore.running, pending: llmSemaphore.pending };
 }

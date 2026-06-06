@@ -22,6 +22,7 @@ import {
 import { formatUserError } from "../../utils/errorMessage.js";
 import { search } from "../../search/retrieval.js";
 import { generateAnswer } from "../../search/answerGeneration.js";
+import { llmQueueDepth } from "../../ai/client.js";
 
 interface PostedCtx {
   client: MattermostClient;
@@ -166,10 +167,13 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
       return;
     }
 
+    const { pending } = llmQueueDepth();
     const thinkingPost = await client.createPost({
       channel_id: post.channel_id,
       root_id: post.root_id || post.id,
-      message: `🔍 Cerco nella wiki: _${query}_…`,
+      message: pending > 0
+        ? `⏳ In coda (${pending} richieste prima)… _${query}_`
+        : `🔍 Cerco nella wiki: _${query}_…`,
     });
 
     try {

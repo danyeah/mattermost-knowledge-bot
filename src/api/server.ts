@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { config } from "../config.js";
 import { search, type SearchScope } from "../search/retrieval.js";
 import { generateAnswer } from "../search/answerGeneration.js";
+import { llmQueueDepth } from "../ai/client.js";
 import type { Logger } from "pino";
 
 function scopeFromPageUrl(pageUrl: string | undefined): SearchScope | undefined {
@@ -180,6 +181,14 @@ function widgetJs(): string {
     send.disabled = true;
     addMsg(q, 'user');
     const thinking = addMsg('⏳ Cerco...', 'bot');
+    // Poll queue position while waiting
+    const pollTimer = setInterval(async () => {
+      try {
+        const q = await fetch('/kb/queue').then(r => r.json());
+        if (q.pending > 0) thinking.textContent = '⏳ In coda... (' + q.pending + ' prima di te)';
+        else thinking.textContent = '⏳ Elaboro...';
+      } catch {}
+    }, 2000);
     try {
       const res = await fetch(API, {
         method: 'POST',
@@ -194,6 +203,7 @@ function widgetJs(): string {
       thinking.remove();
       addMsg('Errore di connessione.', 'bot error');
     } finally {
+      clearInterval(pollTimer);
       send.disabled = false;
       input.focus();
     }
@@ -254,6 +264,12 @@ export function startApiServer(log: Logger): void {
         log.error({ err }, "api_search_error");
         json(res, 500, { error: "errore interno" });
       }
+      return;
+    }
+
+    if (url === "/kb/queue") {
+      cors(res);
+      json(res, 200, llmQueueDepth());
       return;
     }
 
