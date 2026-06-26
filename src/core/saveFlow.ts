@@ -45,6 +45,28 @@ export interface SaveFlowResult {
   topicDisplayName: string;
   channelDisplayName: string;
   changeSummary: string;
+  /** Non-image attachments whose text could not be extracted (scanned/image
+   * PDFs, unsupported formats). Their content was NOT indexed — surfaced to the
+   * user so an empty/unchanged save doesn't look like a silent success. */
+  unreadableAttachments: string[];
+}
+
+/** Builds the "✅ Saved" confirmation message, appending a warning when some
+ * attachments could not be read. Shared by the direct-save and confirmation
+ * flows so the wording stays consistent. */
+export function buildSavedMessage(result: SaveFlowResult): string {
+  let message = `✅ Saved to **${result.topicDisplayName}** in [${result.channelDisplayName}](${result.documentUrl})\n_${result.changeSummary}_`;
+
+  if (result.unreadableAttachments.length > 0) {
+    const names = result.unreadableAttachments.map((n) => `\`${n}\``).join(", ");
+    const plural = result.unreadableAttachments.length > 1;
+    message +=
+      `\n\n⚠️ Non sono riuscito a leggere ${plural ? "questi allegati" : "questo allegato"}: ${names}. ` +
+      `Probabilmente ${plural ? "sono PDF scansionati/immagini o formati" : "è un PDF scansionato/immagine o un formato"} senza testo selezionabile, ` +
+      `quindi il contenuto non è stato indicizzato. Esportali con testo selezionabile (o incolla il testo nel thread) e rifai \`salva\`.`;
+  }
+
+  return message;
 }
 
 const insertSaveStmt = db.prepare(
@@ -156,6 +178,15 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     ...(existingTopic ? { documentId: existingTopic.outline_document_id } : {}),
     ctx: { mmClient, outlineClient, logger },
   });
+
+  // Non-image attachments that yielded no extractable text — their content
+  // never reaches the merge AI, so we warn the user instead of silently saving.
+  const unreadableAttachments: string[] = [];
+  for (const mapping of attachmentMap.values()) {
+    if (!mapping.isImage && (!mapping.extractedText || mapping.extractedText.trim().length === 0)) {
+      unreadableAttachments.push(mapping.filename);
+    }
+  }
 
   const threadMessagesFull = thread.map((p) => {
     const attachments: MessageAttachment[] = (p.file_ids ?? []).map((fid) => {
@@ -354,5 +385,6 @@ export async function executeSave(opts: SaveFlowOpts): Promise<SaveFlowResult> {
     topicDisplayName: resolvedTopic.topic_display_name,
     channelDisplayName: channel.mm_channel_name,
     changeSummary,
+    unreadableAttachments,
   };
 }

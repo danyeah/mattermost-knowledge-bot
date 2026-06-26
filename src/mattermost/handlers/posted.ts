@@ -11,7 +11,7 @@ import {
   deletePendingById,
 } from "../../db/repositories/pendingConfirmations.js";
 import { db } from "../../db/index.js";
-import { executeSave } from "../../core/saveFlow.js";
+import { executeSave, buildSavedMessage } from "../../core/saveFlow.js";
 import { withChannelLock } from "../../utils/locks.js";
 import { parseCommand } from "../../core/commandParser.js";
 import { detectTopic, toDisplayName } from "../../ai/topicDetection.js";
@@ -358,7 +358,7 @@ ${lastLine}`,
         return;
       }
 
-      const { documentUrl, topicDisplayName, channelDisplayName, changeSummary } = await executeSave({
+      const saveResult = await executeSave({
         triggeringPost: post,
         triggeringUsername,
         thread,
@@ -369,6 +369,7 @@ ${lastLine}`,
         topicDisplayName: detection.topic_display_name,
         ctx: { mmClient: client, outlineClient, logger },
       });
+      const { documentUrl } = saveResult;
 
       const lingering = findActivePendingByThreadRoot(post.root_id);
       if (lingering) deletePendingById(lingering.id);
@@ -376,7 +377,7 @@ ${lastLine}`,
       await client.createPost({
         channel_id: post.channel_id,
         root_id: post.root_id,
-        message: `✅ Saved to **${topicDisplayName}** in [${channelDisplayName}](${documentUrl})\n_${changeSummary}_`,
+        message: buildSavedMessage(saveResult),
       });
       logger.info({ channel_id: post.channel_id, root_id: post.root_id, document_url: documentUrl }, "save_completed");
     } catch (err) {

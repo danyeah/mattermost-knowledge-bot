@@ -10,7 +10,7 @@ import {
   type PendingConfirmationRow,
 } from "../db/repositories/pendingConfirmations.js";
 import { findTopicByChannelAndSlug } from "../db/repositories/topics.js";
-import { executeSave } from "./saveFlow.js";
+import { executeSave, buildSavedMessage } from "./saveFlow.js";
 import { toDisplayName } from "../ai/topicDetection.js";
 import { formatUserError } from "../utils/errorMessage.js";
 
@@ -187,12 +187,7 @@ export async function resumeFromConfirmation(opts: ResumeOpts): Promise<void> {
   // lock; nesting another withChannelLock here on the same channel deadlocks
   // because the inner lock chains onto the outer's still-pending promise.
   try {
-    const {
-      documentUrl,
-      topicDisplayName: finalDisplayName,
-      channelDisplayName,
-      changeSummary,
-    } = await executeSave({
+    const saveResult = await executeSave({
       triggeringPost: payload.triggeringPost,
       triggeringUsername: payload.triggeringUsername,
       thread: payload.thread as Post[],
@@ -203,11 +198,12 @@ export async function resumeFromConfirmation(opts: ResumeOpts): Promise<void> {
       topicDisplayName,
       ctx: { mmClient, outlineClient, logger },
     });
+    const { documentUrl } = saveResult;
 
     await mmClient.createPost({
       channel_id: payload.channelId,
       root_id: payload.triggeringPost.root_id || payload.triggeringPost.id,
-      message: `✅ Saved to **${finalDisplayName}** in [${channelDisplayName}](${documentUrl})\n_${changeSummary}_`,
+      message: buildSavedMessage(saveResult),
     });
 
     deletePendingById(pending.id);
