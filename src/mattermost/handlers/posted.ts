@@ -213,8 +213,8 @@ export async function handlePosted(event: PostedEvent, ctx: PostedCtx): Promise<
       channel_id: post.channel_id,
       root_id: post.root_id || post.id,
       message: `**Knowledge Bot commands:**
-• \`@${config.MM_BOT_USERNAME}\` (in a thread reply) — salva il thread, rileva topic automaticamente
-• \`@${config.MM_BOT_USERNAME} #topic-name\` — salva su un topic esplicito
+• \`@${config.MM_BOT_USERNAME} salva\` (in a thread reply) — salva il thread, rileva topic automaticamente
+• \`@${config.MM_BOT_USERNAME} salva #topic-name\` — salva su un topic esplicito
 • \`@${config.MM_BOT_USERNAME} cerca domanda\` — cerca nella wiki aziendale con AI
 • \`@${config.MM_BOT_USERNAME} status\` — mostra le statistiche del canale
 • \`@${config.MM_BOT_USERNAME} help\` — mostra questo messaggio
@@ -245,7 +245,22 @@ ${lastLine}`,
     return;
   }
 
-  // Default: subcommand === "save" — requires being a thread reply
+  // Mentioned without a recognized command (free text or bare mention).
+  // Save now requires an explicit `salva`, so reply with a usage hint instead
+  // of saving the thread by accident.
+  if (command.subcommand === "unknown") {
+    await client.createPost({
+      channel_id: post.channel_id,
+      root_id: post.root_id || post.id,
+      message: `Specifica un comando:
+• \`@${config.MM_BOT_USERNAME} salva\` — salva questo thread nella wiki
+• \`@${config.MM_BOT_USERNAME} cerca domanda\` — cerca nella wiki aziendale
+• \`@${config.MM_BOT_USERNAME} help\` — tutti i comandi`,
+    });
+    return;
+  }
+
+  // subcommand === "save" — requires being a thread reply
   if (!post.root_id) {
     await client.createPost({
       channel_id: post.channel_id,
